@@ -11,7 +11,16 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => readFileSync(resolve(root, p), 'utf8');
 
 // 依赖顺序：被依赖的排前面
-const MODULES = ['src/encoding.js', 'src/chapters.js', 'src/cleaner.js', 'src/store.js', 'src/app.js'];
+const MODULES = [
+  'src/encoding.js',
+  'src/chapters.js',
+  'src/cleaner.js',
+  'src/formats/zip.js',
+  'src/formats/epub.js',
+  'src/formats/pdf.js',
+  'src/store.js',
+  'src/app.js',
+];
 
 const stripModuleSyntax = (code) => code
   .replace(/^\s*import\s+[^;]*?from\s+['"][^'"]+['"];\s*$/gm, '')

@@ -241,3 +241,27 @@ kbd {
   .hero h1 { font-size: 26px; }
   #view-reader { padding: 16px 14px 90px; }
 }
+
+/* ===== 无缝滚动阅读 ===== */
+.chapter-flow { max-width: var(--reader-width); margin: 0 auto; overflow-anchor: none; }
+.flow-chapter { overflow-anchor: none; }
+.flow-chapter { padding-bottom: 8px; }
+.flow-chapter > h2 {
+  font-family: var(--font-serif); font-size: calc(var(--reader-size) * 1.3); text-align: center;
+  margin: 46px 0 26px; padding-bottom: 14px; border-bottom: 1px solid var(--border);
+}
+.flow-chapter:first-child > h2 { margin-top: 12px; }
+.flow-chapter .flow-body {
+  font-family: var(--reader-font); font-size: var(--reader-size); line-height: var(--reader-line);
+  letter-spacing: var(--reader-spacing);
+}
+.flow-chapter .flow-body p { margin: 0 0 var(--reader-para); text-align: justify; }
+.flow-chapter .flow-body p.blank { height: .6em; margin: 0; }
+.flow-chapter .flow-body mark { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 2px; }
+.flow-tip { text-align: center; color: var(--text-dim); font-size: 13px; padding: 30px 0 60px; }
+
+/* ===== 批量导入 ===== */
+.batch-list { margin: 14px 0 0; padding-left: 20px; font-size: 13px; line-height: 1.9; max-height: 260px; overflow: auto; }
+.batch-list li.ok { color: var(--text); }
+.batch-list li.fail { color: var(--danger); }
+#batch-modal .book-progress { height: 6px; }

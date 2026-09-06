@@ -1,9 +1,20 @@
 /**
  * 纯逻辑单元测试（不依赖浏览器）：node tests/run-tests.mjs
  */
-import { cleanText, isGarbledLine, tryFixMojibake } from '../src/cleaner.js';
-import { splitChapters, suggestRuleIds, analyzeRules, fallbackSplit } from '../src/chapters.js';
+import { readFile } from 'node:fs/promises';
+import { cleanText, isGarbledLine, tryFixMojibake, cleanBookTitle } from '../src/cleaner.js';
+import {
+  splitChapters, suggestRuleIds, analyzeRules, fallbackSplit,
+  cnToNumber, parseChapterNumber, looseChapterNumber,
+} from '../src/chapters.js';
 import { decodeBuffer, scoreText } from '../src/encoding.js';
+import { parseEpub, htmlToText } from '../src/formats/epub.js';
+import { parsePdf } from '../src/formats/pdf.js';
+
+const readBuffer = async (path) => {
+  const buf = await readFile(new URL(path, import.meta.url));
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+};
 
 let passed = 0;
 let failed = 0;
@@ -131,6 +142,70 @@ group('编码识别');
   const g = decodeBuffer(gbk.buffer);
   check('GBK 识别', g.encoding === 'gb18030' && g.text.startsWith('中文'), JSON.stringify(g));
   check('打分函数偏好可读文本', scoreText('正常的中文内容') < scoreText('锟斤拷锟斤拷'), '');
+}
+
+/* ---------- 缺章补切 ---------- */
+group('缺章补切（章节号连号校验）');
+{
+  check('中文数字解析', cnToNumber('一百二十三') === 123 && cnToNumber('十') === 10 && cnToNumber('１２３') === 123);
+  check('标准标题取章节号', parseChapterNumber('第一百二十三章 归途') === 123 && parseChapterNumber('Chapter 689') === 689);
+  const loose = ['123', '(123)', '【123】', '123、标题', '第123節 标题', '123 标题'];
+  check('宽松写法都能认出章节号', loose.every((l) => looseChapterNumber(l) === 123), JSON.stringify(loose.map(looseChapterNumber)));
+  check('普通正文不会被当成章节号', looseChapterNumber('2008年的那个夏天') == null);
+
+  // 第 3、4、5 章换了写法，主规则识别不到
+  const text = [
+    '第1章 甲', '正文一', '第2章 乙', '正文二',
+    '3', '正文三', '(4)', '正文四', '5、换了写法', '正文五',
+    '第6章 丙', '正文六',
+  ].join('\n');
+  const repaired = splitChapters(text, { ruleIds: ['cn-chapter'] });
+  check('漏掉的章被补回来', repaired.chapters.length === 6, JSON.stringify(repaired.chapters.map((c) => c.title)));
+  check('补章统计正确', repaired.repair.inserted === 3 && repaired.repair.filled.join() === '3,4,5', JSON.stringify(repaired.repair));
+  check('补出来的章有正文', repaired.chapters[2].content.includes('正文三'), JSON.stringify(repaired.chapters[2]));
+  const off = splitChapters(text, { ruleIds: ['cn-chapter'], repairMissing: false });
+  check('可以关掉补章', off.chapters.length === 3, JSON.stringify(off.chapters.map((c) => c.title)));
+
+  const gap = splitChapters(['第1章 甲', '正文', '第4章 丁', '正文'].join('\n'), { ruleIds: ['cn-chapter'] });
+  check('正文里真的没有就如实报告缺章', gap.repair.stillMissing.join() === '2,3', JSON.stringify(gap.repair));
+}
+
+/* ---------- 书名清洗 ---------- */
+group('书名清洗');
+{
+  const cases = [
+    ['盘龙(www.biquge.com)【完结】.txt', '盘龙'],
+    ['【笔趣阁 www.biquge.cc】斗破苍穹.txt', '斗破苍穹'],
+    ['诡秘之主_精校版_www.xxx.net.txt', '诡秘之主'],
+    ['雪中悍刀行（顶点小说网）全本txt下载', '雪中悍刀行'],
+    ['凡人修仙传.epub', '凡人修仙传'],
+    ['庆余年（猫腻）', '庆余年（猫腻）'],
+  ];
+  for (const [input, expect] of cases) {
+    check(`${input} → ${expect}`, cleanBookTitle(input) === expect, cleanBookTitle(input));
+  }
+}
+
+/* ---------- EPUB ---------- */
+group('EPUB 解析');
+{
+  const epub = await parseEpub(await readBuffer('../samples/sample.epub'));
+  check('读到书名与作者', epub.title.includes('夜行记') && epub.author === '佚名', JSON.stringify(epub.title));
+  check('自带目录 3 章', epub.chapters.length === 3, JSON.stringify(epub.chapters.map((c) => c.title)));
+  check('章节标题来自 toc.ncx', epub.chapters[0].title === '第一章 初遇', epub.chapters[0].title);
+  check('正文不重复标题', !epub.chapters[0].content.startsWith('第一章'), JSON.stringify(epub.chapters[0].content.slice(0, 20)));
+  check('书名清洗后干净', cleanBookTitle(epub.title) === '夜行记', cleanBookTitle(epub.title));
+  check('HTML 转文本', htmlToText('<p>甲</p><p>乙&amp;丙</p>') === '甲\n乙&丙', JSON.stringify(htmlToText('<p>甲</p><p>乙&amp;丙</p>')));
+}
+
+/* ---------- PDF ---------- */
+group('PDF 解析');
+{
+  const pdf = await parsePdf(await readBuffer('../samples/sample.pdf'));
+  check('提取到 3 页', pdf.pages.length === 3, String(pdf.pages.length));
+  check('中文正文提取正确', pdf.text.includes('夜色沉沉，他在林间遇见了那个人'), JSON.stringify(pdf.text.slice(0, 60)));
+  const chapters = splitChapters(cleanText(pdf.text, {}, { ruleIds: ['cn-chapter'] }).text, { ruleIds: ['cn-chapter'] });
+  check('PDF 文本可以正常分章', chapters.chapters.length === 3, JSON.stringify(chapters.chapters.map((c) => c.title)));
 }
 
 console.log(results.join('\n'));

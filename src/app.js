@@ -3,7 +3,9 @@
  * 纯前端，无后端，数据只存在浏览器本地。
  */
 import { decodeBuffer, SUPPORTED_ENCODINGS } from './encoding.js';
-import { cleanText, CLEAN_DEFAULTS } from './cleaner.js';
+import { cleanText, cleanBookTitle, CLEAN_DEFAULTS } from './cleaner.js';
+import { parseEpub } from './formats/epub.js';
+import { parsePdf } from './formats/pdf.js';
 import {
   CHAPTER_RULES, DEFAULT_SPLIT_OPTIONS, splitChapters, analyzeRules, suggestRuleIds,
 } from './chapters.js';
@@ -36,6 +38,9 @@ const state = {
   highlight: '',
   autoScrollTimer: null,
   pending: null,       // 导入 / 重新排版的临时数据
+  flow: null,          // 无缝滚动模式下已加载的章节区间
+  nativeChapters: null,// 电子书自带目录
+  batchAbort: false,
 };
 
 /* =========================================================
@@ -62,6 +67,7 @@ function applySettings() {
     .forEach((k) => { $(`set-${k}`).value = s[k]; });
   $('set-fontFamily').value = s.fontFamily;
   [...$('theme-row').children].forEach((b) => b.classList.toggle('active', b.dataset.themeValue === s.theme));
+  [...$('mode-row').children].forEach((b) => b.classList.toggle('active', b.dataset.modeValue === (s.readingMode || 'scroll')));
   saveSettings(s);
 }
 
@@ -87,6 +93,14 @@ function bindSettings() {
     if (!btn) return;
     state.settings.theme = btn.dataset.themeValue;
     applySettings();
+  });
+  $('mode-row').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-mode-value]');
+    if (!btn) return;
+    state.settings.readingMode = btn.dataset.modeValue;
+    applySettings();
+    if (state.book) renderReader(state.chapterIndex, 0);
+    toast(btn.dataset.modeValue === 'scroll' ? '已切换为上下无缝滚动' : '已切换为一章一页');
   });
   $('btn-reset-settings').addEventListener('click', () => {
     state.settings = { ...DEFAULT_SETTINGS };
@@ -174,7 +188,7 @@ function showShelf() {
   $('btn-retypeset').hidden = true;
   $('btn-export').hidden = true;
   $('top-book').textContent = '清风阅读';
-  $('top-chapter').textContent = '本地 TXT 小说阅读器';
+  $('top-chapter').textContent = '本地小说阅读器 · TXT / EPUB / PDF';
   $('progressbar').style.width = '0';
   closePanels();
   refreshShelf();
@@ -206,6 +220,7 @@ function collectSplitOptions() {
     maxTitleLength: Number($('opt-maxTitle').value) || DEFAULT_SPLIT_OPTIONS.maxTitleLength,
     fallbackLines: Number($('opt-fallbackLines').value) || DEFAULT_SPLIT_OPTIONS.fallbackLines,
     autoFallback: $('opt-autoFallback').checked,
+    repairMissing: $('opt-repairMissing').checked,
   };
 }
 
@@ -228,6 +243,7 @@ function fillOptionsUI(cleanOpts, splitOpts) {
   $('opt-maxTitle').value = s.maxTitleLength;
   $('opt-fallbackLines').value = s.fallbackLines;
   $('opt-autoFallback').checked = s.autoFallback;
+  $('opt-repairMissing').checked = s.repairMissing !== false;
   buildRuleList(s.ruleIds);
 }
 
@@ -268,13 +284,49 @@ function runPreview() {
   if (!pending) return;
   const cleanOpts = collectCleanOptions();
   const splitOpts = collectSplitOptions();
-  const { text, stats } = cleanText(pending.raw, cleanOpts, splitOpts);
-  const { chapters, usedFallback } = splitChapters(text, splitOpts);
+  const useNative = pending.native && $('opt-source').value === 'native';
+
+  let text;
+  let stats;
+  let chapters;
+  let usedFallback = false;
+  let repair = { inserted: 0, filled: [], stillMissing: [] };
+
+  if (useNative) {
+    // 电子书自带目录：逐章清洗，章节结构保持不变
+    const cleanedChapters = pending.native.map((c) => {
+      const res = cleanText(c.content, cleanOpts, splitOpts);
+      return { title: cleanBookTitle(c.title) === c.title ? c.title : c.title, content: res.text, stats: res.stats };
+    });
+    chapters = cleanedChapters.map((c) => ({
+      title: c.title,
+      level: 2,
+      content: c.content,
+      charCount: c.content.replace(/\s/g, '').length,
+    }));
+    stats = cleanedChapters.reduce((acc, c) => {
+      Object.keys(acc).forEach((k) => { acc[k] += c.stats[k] || 0; });
+      return acc;
+    }, {
+      originalChars: 0, originalLines: 0, urlsRemoved: 0, adLines: 0, garbledLines: 0,
+      mojibakeFixed: 0, mergedLines: 0, blankLinesRemoved: 0, finalChars: 0, finalLines: 0,
+    });
+    text = chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n');
+  } else {
+    const cleaned = cleanText(pending.raw, cleanOpts, splitOpts);
+    text = cleaned.text;
+    stats = cleaned.stats;
+    const split = splitChapters(text, splitOpts);
+    chapters = split.chapters;
+    usedFallback = split.usedFallback;
+    repair = split.repair || repair;
+  }
 
   pending.clean = text;
   pending.chapters = chapters;
   pending.cleanOptions = cleanOpts;
   pending.splitOptions = splitOpts;
+  pending.useNative = useNative;
 
   $('preview-stats').textContent =
     `原文 ${fmtNum(stats.originalChars)} 字 → 清洗后 ${fmtNum(stats.finalChars)} 字；`
@@ -292,18 +344,39 @@ function runPreview() {
   $('preview-text').textContent = text.slice(0, 900) || '（清洗后内容为空，请检查清洗选项）';
   $('import-status').textContent = usedFallback
     ? `未匹配到章节标题，已按每 ${splitOpts.fallbackLines} 行自动分为 ${chapters.length} 章`
-    : `识别到 ${fmtNum(chapters.length)} 章`;
+    : `识别到 ${fmtNum(chapters.length)} 章${useNative ? '（来自电子书自带目录）' : ''}`;
+
+  const repairBox = $('repair-stats');
+  if (useNative) {
+    repairBox.textContent = '使用电子书自带目录时不需要补章。';
+  } else if (repair.inserted > 0) {
+    const sample = repair.filled.slice(0, 12).join('、');
+    repairBox.textContent = `已补回 ${repair.inserted} 章（换了写法没被规则识别的）：第 ${sample}${repair.filled.length > 12 ? ' 等' : ''} 章`
+      + (repair.stillMissing.length ? `；仍缺 ${repair.stillMissing.length} 章（正文里确实找不到）：第 ${repair.stillMissing.slice(0, 8).join('、')} 章` : '');
+  } else if (repair.stillMissing.length) {
+    repairBox.textContent = `章节号不连续，缺 ${repair.stillMissing.length} 章：第 ${repair.stillMissing.slice(0, 12).join('、')} 章；`
+      + '正文里没找到对应标题，可能是原文就少了这些章。';
+  } else {
+    repairBox.textContent = splitOpts.repairMissing ? '章节号连续，没有发现漏掉的章。' : '';
+  }
+
   updateRuleCounts(text);
 }
 
-function openImportModal(raw, name, encodingInfo, existing) {
+function openImportModal(raw, name, encodingInfo, existing, native) {
   state.pending = {
     raw,
     name,
     encoding: encodingInfo.encoding,
     buffer: encodingInfo.buffer || null,
     bookId: existing ? existing.id : null,
+    native: native && native.length ? native : null,
+    kind: encodingInfo.kind || 'txt',
   };
+  $('source-field').hidden = !state.pending.native;
+  $('opt-source').value = state.pending.native
+    ? ((existing && existing.chapterSource) || 'native')
+    : 'rules';
   $('import-title').textContent = existing ? '重新排版 / 重新分章' : '导入并排版';
   $('import-confirm').textContent = existing ? '保存并重新阅读' : '导入并开始阅读';
   $('import-name').value = name;
@@ -317,10 +390,13 @@ function openImportModal(raw, name, encodingInfo, existing) {
     encSelect.appendChild(opt);
   }
   encSelect.value = 'auto';
-  encSelect.disabled = !encodingInfo.buffer;
-  $('import-encoding-hint').textContent = encodingInfo.buffer
-    ? `自动识别结果：${encodingInfo.encoding}${encodingInfo.confident ? '' : '（把握不大，若显示乱码请手动切换）'}`
-    : '粘贴导入的文本无需选择编码';
+  encSelect.disabled = !encodingInfo.buffer || state.pending.kind !== 'txt';
+  const kindLabel = { txt: 'TXT', epub: 'EPUB', pdf: 'PDF', paste: '粘贴文本' }[state.pending.kind] || 'TXT';
+  $('import-encoding-hint').textContent = state.pending.kind === 'txt'
+    ? (encodingInfo.buffer
+      ? `自动识别结果：${encodingInfo.encoding}${encodingInfo.confident ? '' : '（把握不大，若显示乱码请手动切换）'}`
+      : '粘贴导入的文本无需选择编码')
+    : `${kindLabel} 文件已解析为文本，无需选择编码`;
 
   const suggested = existing && existing.splitOptions && existing.splitOptions.ruleIds.length
     ? existing.splitOptions.ruleIds
@@ -341,6 +417,8 @@ function bindImportInputs() {
   ['opt-blankLines', 'opt-adKeywords', 'opt-custom', 'opt-maxTitle', 'opt-fallbackLines']
     .forEach((id) => $(id).addEventListener('input', schedulePreview));
 
+  $('opt-source').addEventListener('change', schedulePreview);
+  $('opt-repairMissing').addEventListener('change', schedulePreview);
   $('import-encoding').addEventListener('change', () => {
     const pending = state.pending;
     if (!pending || !pending.buffer) return;
@@ -389,6 +467,8 @@ async function confirmImport() {
     chapters: chapters.map((c) => ({ title: c.title, level: c.level, charCount: c.charCount })),
     cleanOptions: pending.cleanOptions,
     splitOptions: pending.splitOptions,
+    chapterSource: pending.useNative ? 'native' : 'rules',
+    kind: pending.kind || 'txt',
     progress: existing && existing.progress
       ? { chapterIndex: Math.min(existing.progress.chapterIndex, chapters.length - 1), ratio: 0 }
       : { chapterIndex: 0, ratio: 0 },
@@ -399,6 +479,7 @@ async function confirmImport() {
       raw: pending.raw,
       clean: pending.clean,
       chapterTexts: chapters.map((c) => c.content),
+      nativeChapters: pending.native || null,
     });
   } catch (err) {
     toast(`保存失败：${err && err.message ? err.message : err}`);
@@ -411,23 +492,191 @@ async function confirmImport() {
   toast(`《${title}》已导入，共 ${chapters.length} 章`);
 }
 
-async function handleFiles(files) {
-  for (const file of files) {
-    try {
-      const buffer = await file.arrayBuffer();
-      const decoded = decodeBuffer(buffer);
-      const name = file.name.replace(/\.[^.]+$/, '');
-      openImportModal(decoded.text, name, { ...decoded, buffer });
-    } catch (err) {
-      toast(`读取 ${file.name} 失败：${err.message}`);
-    }
-    break; // 一次处理一本，避免弹窗互相覆盖
+const SUPPORTED_EXT = /\.(txt|text|epub|pdf)$/i;
+
+/** 按扩展名解析成统一的「待导入」结构 */
+async function readBookFile(file) {
+  const buffer = await file.arrayBuffer();
+  const lower = (file.name || '').toLowerCase();
+  if (lower.endsWith('.epub')) {
+    const book = await parseEpub(buffer);
+    return {
+      kind: 'epub',
+      raw: book.text,
+      name: cleanBookTitle(book.title || file.name),
+      encoding: 'utf-8',
+      confident: true,
+      native: book.chapters,
+      buffer: null,
+    };
   }
-  if (files.length > 1) toast('一次导入一本，剩下的可以稍后再选');
+  if (lower.endsWith('.pdf')) {
+    const pdf = await parsePdf(buffer);
+    return {
+      kind: 'pdf',
+      raw: pdf.text,
+      name: cleanBookTitle(pdf.title || file.name),
+      encoding: 'utf-8',
+      confident: true,
+      native: null,
+      buffer: null,
+    };
+  }
+  const decoded = decodeBuffer(buffer);
+  return {
+    kind: 'txt',
+    raw: decoded.text,
+    name: cleanBookTitle(file.name),
+    encoding: decoded.encoding,
+    confident: decoded.confident,
+    native: null,
+    buffer,
+  };
+}
+
+/** 自带目录 → 章节数组（逐章清洗） */
+function nativeToChapters(native, cleanOpts, splitOpts) {
+  return native.map((c) => {
+    const content = cleanText(c.content, cleanOpts, splitOpts).text;
+    return { title: c.title, level: 2, content, charCount: content.replace(/\s/g, '').length };
+  }).filter((c) => c.charCount > 0);
+}
+
+async function handleFiles(files, opts = {}) {
+  const list = [...files].filter((f) => SUPPORTED_EXT.test(f.name || ''));
+  if (!list.length) {
+    toast('没有找到可导入的 TXT / EPUB / PDF 文件');
+    return;
+  }
+  if (list.length === 1 && !opts.batch) {
+    try {
+      const info = await readBookFile(list[0]);
+      if (!info.raw || !info.raw.replace(/\s/g, '')) { toast(`${list[0].name} 里没有可读的文字`); return; }
+      openImportModal(info.raw, info.name, info, null, info.native);
+    } catch (err) {
+      toast(`读取 ${list[0].name} 失败：${err.message}`);
+    }
+    return;
+  }
+  await batchImport(list);
+}
+
+/** 一键把一批文件（整个文件夹）按推荐设置导入书架 */
+async function batchImport(files) {
+  state.batchAbort = false;
+  showModal('batch-modal');
+  $('batch-title').textContent = `批量导入 ${files.length} 个文件`;
+  $('batch-done').classList.add('hidden');
+  $('batch-cancel').classList.remove('hidden');
+  const listEl = $('batch-list');
+  listEl.innerHTML = '';
+  const existing = await listBooks();
+  let ok = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (let i = 0; i < files.length; i += 1) {
+    if (state.batchAbort) break;
+    const file = files[i];
+    $('batch-status').textContent = `(${i + 1}/${files.length}) 正在处理：${file.name}`;
+    $('batch-bar').style.width = `${((i / files.length) * 100).toFixed(1)}%`;
+    try {
+      /* eslint-disable no-await-in-loop */
+      const info = await readBookFile(file);
+      if (!info.raw || !info.raw.replace(/\s/g, '')) throw new Error('没有可读的文字');
+
+      const ruleIds = suggestRuleIds(info.raw);
+      const splitOpts = {
+        ...DEFAULT_SPLIT_OPTIONS,
+        ruleIds: ruleIds.length ? ruleIds : DEFAULT_SPLIT_OPTIONS.ruleIds,
+      };
+      const cleaned = cleanText(info.raw, CLEAN_DEFAULTS, splitOpts);
+      const useNative = !!(info.native && info.native.length > 1);
+      const split = useNative ? null : splitChapters(cleaned.text, splitOpts);
+      const chapters = useNative ? nativeToChapters(info.native, CLEAN_DEFAULTS, splitOpts) : split.chapters;
+      const charCount = cleaned.text.replace(/\s/g, '').length;
+
+      const dup = existing.find((b) => b.title === info.name && Math.abs((b.charCount || 0) - charCount) < 50);
+      if (dup) {
+        skipped += 1;
+        listEl.appendChild(el('li', 'ok', `《${info.name}》已在书架，跳过`));
+        continue;
+      }
+
+      const meta = {
+        id: newId(),
+        title: info.name,
+        encoding: info.encoding,
+        kind: info.kind,
+        createdAt: Date.now(),
+        lastReadAt: 0,
+        charCount,
+        chapterCount: chapters.length,
+        chapters: chapters.map((c) => ({ title: c.title, level: c.level, charCount: c.charCount })),
+        cleanOptions: { ...CLEAN_DEFAULTS },
+        splitOptions: splitOpts,
+        chapterSource: useNative ? 'native' : 'rules',
+        progress: { chapterIndex: 0, ratio: 0 },
+      };
+      await saveBook(meta, {
+        raw: info.raw,
+        clean: useNative ? chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n') : cleaned.text,
+        chapterTexts: chapters.map((c) => c.content),
+        nativeChapters: info.native || null,
+      });
+      existing.push(meta);
+      ok += 1;
+      const repaired = split && split.repair && split.repair.inserted ? `，补回 ${split.repair.inserted} 章` : '';
+      listEl.appendChild(el('li', 'ok', `《${info.name}》${chapters.length} 章${repaired}`));
+    } catch (err) {
+      failed += 1;
+      listEl.appendChild(el('li', 'fail', `${file.name}：${err.message}`));
+    }
+    listEl.scrollTop = listEl.scrollHeight;
+    await new Promise((r) => setTimeout(r, 0));   // 让界面有机会刷新
+    /* eslint-enable no-await-in-loop */
+  }
+
+  $('batch-bar').style.width = '100%';
+  $('batch-status').textContent = `完成：成功 ${ok} 本，跳过 ${skipped} 本，失败 ${failed} 本`;
+  $('batch-cancel').classList.add('hidden');
+  $('batch-done').classList.remove('hidden');
+  await refreshShelf();
+}
+
+/** 从拖拽事件里取出文件（支持整个文件夹） */
+async function filesFromDataTransfer(dt) {
+  const out = [];
+  const walk = async (entry) => {
+    if (!entry) return;
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      out.push(file);
+      return;
+    }
+    if (entry.isDirectory) {
+      const reader = entry.createReader();
+      let batch = [];
+      do {
+        // eslint-disable-next-line no-await-in-loop
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        // eslint-disable-next-line no-await-in-loop
+        for (const child of batch) await walk(child);
+      } while (batch.length);
+    }
+  };
+  const entries = [...(dt.items || [])]
+    .map((item) => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+    .filter(Boolean);
+  if (entries.length) {
+    for (const entry of entries) await walk(entry);   // eslint-disable-line no-await-in-loop
+    if (out.length) return out;
+  }
+  return [...dt.files];
 }
 
 /* =========================================================
- * 阅读
+ * 阅读（支持「一章一页」与「上下无缝滚动」两种模式）
  * =======================================================*/
 async function openBook(id) {
   const meta = state.books.find((b) => b.id === id) || (await listBooks()).find((b) => b.id === id);
@@ -441,6 +690,7 @@ async function openBook(id) {
     : [content.clean || ''];
   state.cleanTextValue = content.clean || '';
   state.rawTextValue = content.raw || '';
+  state.nativeChapters = content.nativeChapters || null;
   state.chapterIndex = meta.progress ? Math.min(meta.progress.chapterIndex, state.chapterTexts.length - 1) : 0;
 
   $('view-shelf').classList.add('hidden');
@@ -449,7 +699,7 @@ async function openBook(id) {
   $('btn-export').hidden = false;
   $('top-book').textContent = meta.title;
   renderToc();
-  renderChapter(state.chapterIndex, meta.progress ? meta.progress.ratio : 0);
+  renderReader(state.chapterIndex, meta.progress ? meta.progress.ratio : 0);
 }
 
 function chapterTitleAt(i) {
@@ -457,17 +707,14 @@ function chapterTitleAt(i) {
   return c ? c.title : '';
 }
 
-function renderChapter(index, restoreRatio = 0) {
-  if (!state.book) return;
-  const total = state.chapterTexts.length;
-  const i = Math.max(0, Math.min(total - 1, index));
-  state.chapterIndex = i;
+function isScrollMode() {
+  return state.settings.readingMode !== 'paged';
+}
 
-  $('chapter-title').textContent = chapterTitleAt(i);
-  const body = $('chapter-body');
-  const text = state.chapterTexts[i] || '';
-  const lines = text.split('\n');
-  const html = lines.map((line) => {
+/** 把一章正文转成段落 HTML */
+function chapterInnerHtml(index) {
+  const text = state.chapterTexts[index] || '';
+  const html = text.split('\n').map((line) => {
     const t = line.trim();
     if (!t) return '<p class="blank"></p>';
     let safe = escapeHtml(line);
@@ -477,28 +724,158 @@ function renderChapter(index, restoreRatio = 0) {
     }
     return `<p>${safe}</p>`;
   }).join('');
-  body.innerHTML = html || '<p class="muted">（本章没有正文）</p>';
+  return html || '<p class="muted">（本章没有正文）</p>';
+}
 
+function makeFlowSection(index) {
+  const section = el('section', 'flow-chapter');
+  section.dataset.index = String(index);
+  const h = el('h2', null, chapterTitleAt(index));
+  const body = el('div', 'flow-body');
+  body.innerHTML = chapterInnerHtml(index);
+  section.append(h, body);
+  return section;
+}
+
+function renderReader(index, restoreRatio = 0) {
+  if (!state.book) return;
+  const total = state.chapterTexts.length;
+  const i = Math.max(0, Math.min(total - 1, index));
+  state.chapterIndex = i;
+  if (isScrollMode()) renderFlow(i, restoreRatio);
+  else renderPaged(i, restoreRatio);
+  updateChapterChrome();
+  updateProgressBar();
+  saveProgress();
+}
+
+function updateChapterChrome() {
+  const total = state.chapterTexts.length;
+  const i = state.chapterIndex;
   $('top-chapter').textContent = `第 ${i + 1} / ${total} 章 · ${chapterTitleAt(i)}`;
   $('jump-input').value = i + 1;
   $('toc-jump').value = i + 1;
   $('btn-prev').disabled = i === 0;
   $('btn-next').disabled = i === total - 1;
   highlightTocItem(i);
+}
 
-  const target = restoreRatio > 0
-    ? Math.max(0, (document.documentElement.scrollHeight - window.innerHeight) * restoreRatio)
-    : 0;
-  window.scrollTo({ top: target, behavior: 'auto' });
-  // 内容渲染完成后再修正一次滚动位置
+function scrollToRatio(ratio) {
+  const apply = () => {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    window.scrollTo({ top: Math.max(0, max * ratio), behavior: 'auto' });
+  };
+  apply();
+  requestAnimationFrame(apply);
+}
+
+function renderPaged(i, restoreRatio) {
+  $('chapter').classList.remove('hidden');
+  $('chapter-flow').classList.add('hidden');
+  $('flow-tip').classList.add('hidden');
+  $('chapter-title').textContent = chapterTitleAt(i);
+  $('chapter-body').innerHTML = chapterInnerHtml(i);
+  if (restoreRatio > 0) scrollToRatio(restoreRatio);
+  else window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+function renderFlow(i, restoreRatio) {
+  $('chapter').classList.add('hidden');
+  const flow = $('chapter-flow');
+  flow.classList.remove('hidden');
+  flow.innerHTML = '';
+  flow.appendChild(makeFlowSection(i));
+  state.flow = { first: i, last: i };
+  state.lastScrollY = 0;
+  // 刚跳过来的一瞬间不要往前补章：浏览器把页面滚到位时会产生"向上滚"的假信号
+  state.prependLockUntil = Date.now() + 700;
+  $('flow-tip').classList.toggle('hidden', i !== state.chapterTexts.length - 1);
+  window.scrollTo({ top: 0, behavior: 'auto' });
   if (restoreRatio > 0) {
     requestAnimationFrame(() => {
-      const max = document.documentElement.scrollHeight - window.innerHeight;
-      window.scrollTo({ top: Math.max(0, max * restoreRatio), behavior: 'auto' });
+      const section = flow.firstElementChild;
+      if (!section) return;
+      window.scrollTo({ top: Math.max(0, section.offsetTop + section.offsetHeight * restoreRatio), behavior: 'auto' });
     });
   }
-  updateProgressBar();
-  saveProgress();
+  // 章节可能很短，先填满一屏，保证有可滚动的空间
+  requestAnimationFrame(fillViewport);
+}
+
+/** 内容不够一屏时继续往下接，避免短章节导致没法滚动 */
+function fillViewport(maxAdd = 12) {
+  let added = 0;
+  while (added < maxAdd
+    && document.documentElement.scrollHeight <= window.innerHeight + 600
+    && appendNextChapter()) added += 1;
+  return added;
+}
+
+function appendNextChapter() {
+  if (!isScrollMode() || !state.flow) return false;
+  const next = state.flow.last + 1;
+  if (next >= state.chapterTexts.length) {
+    $('flow-tip').classList.remove('hidden');
+    return false;
+  }
+  $('chapter-flow').appendChild(makeFlowSection(next));
+  state.flow.last = next;
+  return true;
+}
+
+function prependPrevChapter() {
+  if (!isScrollMode() || !state.flow) return false;
+  const prev = state.flow.first - 1;
+  if (prev < 0) return false;
+  const flow = $('chapter-flow');
+  const before = document.documentElement.scrollHeight;
+  flow.insertBefore(makeFlowSection(prev), flow.firstElementChild);
+  const after = document.documentElement.scrollHeight;
+  window.scrollBy(0, after - before);   // 保持视线不动
+  state.flow.first = prev;
+  return true;
+}
+
+/** 只保留当前章节附近的若干章，避免长时间滚动后 DOM 越堆越大 */
+function trimFlow() {
+  const flow = $('chapter-flow');
+  const keep = 6;
+  while (flow.children.length > keep * 2 && state.chapterIndex - state.flow.first > keep) {
+    const first = flow.firstElementChild;
+    const height = first.offsetHeight;
+    first.remove();
+    window.scrollBy(0, -height);
+    state.flow.first += 1;
+  }
+  while (flow.children.length > keep * 2 && state.flow.last - state.chapterIndex > keep) {
+    flow.lastElementChild.remove();
+    state.flow.last -= 1;
+  }
+}
+
+/** 滚动时判断"现在读到第几章"，并按需要加载上下文 */
+function onFlowScroll() {
+  if (!isScrollMode() || !state.flow || !state.book) return;
+  const flow = $('chapter-flow');
+  const doc = document.documentElement;
+  const prev = state.lastScrollY == null ? window.scrollY : state.lastScrollY;
+  const goingUp = prev - window.scrollY > 4;
+  state.lastScrollY = window.scrollY;
+  if (window.scrollY + window.innerHeight > doc.scrollHeight - 1500) { appendNextChapter(); fillViewport(4); }
+  // 只有确实在往上翻、且不在跳章后的锁定期内，才往前补章
+  if (goingUp && window.scrollY < 800 && Date.now() > (state.prependLockUntil || 0)) prependPrevChapter();
+
+  let current = state.chapterIndex;
+  for (const section of flow.children) {
+    const rect = section.getBoundingClientRect();
+    if (rect.top <= 140 && rect.bottom > 140) { current = Number(section.dataset.index); break; }
+    if (rect.top > 140) { current = Number(section.dataset.index); break; }
+  }
+  if (current !== state.chapterIndex) {
+    state.chapterIndex = current;
+    updateChapterChrome();
+    trimFlow();
+  }
 }
 
 function goChapter(index, opts = {}) {
@@ -509,15 +886,28 @@ function goChapter(index, opts = {}) {
     return;
   }
   state.highlight = opts.highlight || '';
-  renderChapter(index, 0);
+  renderReader(index, 0);
   if (opts.closePanel !== false) closePanels();
 }
 
-function updateProgressBar() {
-  if (!state.book) return;
-  const total = state.chapterTexts.length;
+/** 当前章内的阅读比例（两种模式通用） */
+function currentRatio() {
+  if (isScrollMode() && state.flow) {
+    const section = [...$('chapter-flow').children].find((n) => Number(n.dataset.index) === state.chapterIndex);
+    if (section && section.offsetHeight > 0) {
+      const passed = window.scrollY - section.offsetTop;
+      return Math.min(1, Math.max(0, passed / section.offsetHeight));
+    }
+    return 0;
+  }
   const max = document.documentElement.scrollHeight - window.innerHeight;
-  const ratio = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+  return max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+}
+
+function updateProgressBar() {
+  if (!state.book) return 0;
+  const total = state.chapterTexts.length;
+  const ratio = currentRatio();
   const percent = ((state.chapterIndex + ratio) / total) * 100;
   $('progressbar').style.width = `${Math.min(100, percent).toFixed(2)}%`;
   return ratio;
@@ -529,9 +919,7 @@ function saveProgress() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     if (!state.book) return;
-    const max = document.documentElement.scrollHeight - window.innerHeight;
-    const ratio = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
-    state.book.progress = { chapterIndex: state.chapterIndex, ratio };
+    state.book.progress = { chapterIndex: state.chapterIndex, ratio: currentRatio() };
     state.book.lastReadAt = Date.now();
     try { await updateBook(state.book); } catch { /* 忽略写入失败 */ }
   }, 400);
@@ -631,8 +1019,13 @@ function startAutoScroll() {
     window.scrollBy(0, (state.settings.autoScrollSpeed || 40) * dt);
     const max = document.documentElement.scrollHeight - window.innerHeight;
     if (window.scrollY >= max - 1) {
-      if (state.chapterIndex < state.chapterTexts.length - 1) goChapter(state.chapterIndex + 1, { closePanel: false });
-      else { stopAutoScroll(); return; }
+      // 滚动模式下后面的章节会自动接上，翻页模式才需要手动跳下一章
+      const more = isScrollMode() ? appendNextChapter() : false;
+      if (!more) {
+        if (!isScrollMode() && state.chapterIndex < state.chapterTexts.length - 1) {
+          goChapter(state.chapterIndex + 1, { closePanel: false });
+        } else { stopAutoScroll(); return; }
+      }
     }
     state.autoScrollTimer = requestAnimationFrame(step);
   };
@@ -679,12 +1072,22 @@ function bindEvents() {
   ['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, (e) => {
     e.preventDefault(); dz.classList.remove('dragover');
   }));
-  dz.addEventListener('drop', (e) => handleFiles([...e.dataTransfer.files]));
+  dz.addEventListener('drop', async (e) => handleFiles(await filesFromDataTransfer(e.dataTransfer)));
   window.addEventListener('dragover', (e) => e.preventDefault());
-  window.addEventListener('drop', (e) => {
+  window.addEventListener('drop', async (e) => {
     e.preventDefault();
-    if (e.dataTransfer && e.dataTransfer.files.length) handleFiles([...e.dataTransfer.files]);
+    if (!e.dataTransfer) return;
+    const files = await filesFromDataTransfer(e.dataTransfer);
+    if (files.length) handleFiles(files);
   });
+
+  $('btn-choose-folder').addEventListener('click', () => $('folder-input').click());
+  $('folder-input').addEventListener('change', (e) => {
+    handleFiles([...e.target.files], { batch: true });
+    e.target.value = '';
+  });
+  $('batch-cancel').addEventListener('click', () => { state.batchAbort = true; });
+  $('batch-done').addEventListener('click', () => hideModal('batch-modal'));
 
   $('btn-paste').addEventListener('click', () => showModal('paste-modal'));
   $('paste-cancel').addEventListener('click', () => hideModal('paste-modal'));
@@ -693,7 +1096,7 @@ function bindEvents() {
     const text = $('paste-text').value;
     if (!text.trim()) { toast('请先粘贴正文'); return; }
     hideModal('paste-modal');
-    openImportModal(text, ($('paste-name').value || '未命名小说').trim(), { encoding: 'utf-8', confident: true });
+    openImportModal(text, cleanBookTitle($('paste-name').value || '未命名小说'), { encoding: 'utf-8', confident: true, kind: 'paste' });
   });
 
   $('btn-shelf').addEventListener('click', showShelf);
@@ -710,7 +1113,13 @@ function bindEvents() {
   $('btn-export').addEventListener('click', exportClean);
   $('btn-retypeset').addEventListener('click', () => {
     if (!state.book) return;
-    openImportModal(state.rawTextValue, state.book.title, { encoding: state.book.encoding, confident: true }, state.book);
+    openImportModal(
+      state.rawTextValue,
+      state.book.title,
+      { encoding: state.book.encoding, confident: true, kind: state.book.kind || 'txt' },
+      state.book,
+      state.nativeChapters,
+    );
   });
 
   $('btn-prev').addEventListener('click', () => goChapter(state.chapterIndex - 1, { closePanel: false }));
@@ -742,6 +1151,7 @@ function bindEvents() {
 
   window.addEventListener('scroll', () => {
     if (!state.book) return;
+    onFlowScroll();
     updateProgressBar();
     saveProgress();
   }, { passive: true });

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>清风阅读 · 本地小说阅读器</title>
-<meta name="description" content="纯本地的 TXT 小说阅读器：自动清理乱码与推广网址、智能排版、多规则分章、任意跳章。">
+<meta name="description" content="纯本地的小说阅读器：支持 TXT / EPUB / PDF，自动清理乱码与推广网址、智能排版、多规则分章与补章、无缝滚动阅读、任意跳章。">
 <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
     <button class="icon-btn" id="btn-toc" title="目录 (T)" aria-label="目录">☰</button>
     <div class="topbar-title">
       <strong id="top-book">清风阅读</strong>
-      <span id="top-chapter">本地 TXT 小说阅读器</span>
+      <span id="top-chapter">本地小说阅读器 · TXT / EPUB / PDF</span>
     </div>
     <div class="topbar-actions">
       <button class="ghost-btn" id="btn-shelf" title="书架">书架</button>
@@ -29,18 +29,24 @@
       <div class="hero">
         <h1>清风阅读</h1>
         <p class="hero-sub">
-          导入 TXT，自动识别编码、清除乱码与推广网址、智能排版；
-          支持多种章节格式并可随意跳转章节。所有数据仅保存在你的浏览器本地。
+          导入 TXT / EPUB / PDF，自动识别编码、清除乱码与推广网址、智能排版；
+          支持多种章节格式、补回漏掉的章、上下无缝滚动阅读并可随意跳章。所有数据仅保存在你的浏览器本地。
         </p>
         <div class="dropzone" id="dropzone">
-          <input type="file" id="file-input" accept=".txt,.text,text/plain" multiple hidden>
+          <input type="file" id="file-input"
+                 accept=".txt,.text,.epub,.pdf,text/plain,application/epub+zip,application/pdf" multiple hidden>
+          <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
           <div class="dropzone-inner">
             <div class="dropzone-icon">📖</div>
             <div class="dropzone-actions">
-              <button class="primary-btn" id="btn-choose">选择 TXT 文件</button>
+              <button class="primary-btn" id="btn-choose">选择文件（TXT / EPUB / PDF）</button>
+              <button class="ghost-btn" id="btn-choose-folder">一键导入整个文件夹</button>
               <button class="ghost-btn" id="btn-paste">粘贴文本导入</button>
             </div>
-            <p class="hint">也可以把文件拖到这里 · 自动识别 UTF-8 / GBK / GB18030 / BIG5 / UTF-16</p>
+            <p class="hint">
+              也可以把文件或整个文件夹拖到这里 · TXT 自动识别 UTF-8 / GBK / GB18030 / BIG5 / UTF-16 ·
+              书名里的网址与站点后缀会自动清掉
+            </p>
           </div>
         </div>
       </div>
@@ -50,15 +56,18 @@
         <span class="muted" id="shelf-count"></span>
       </div>
       <div class="book-grid" id="book-grid"></div>
-      <p class="empty-tip" id="shelf-empty">书架还是空的，先导入一本 TXT 吧。</p>
+      <p class="empty-tip" id="shelf-empty">书架还是空的，先导入一本书吧（TXT / EPUB / PDF，或一整个文件夹）。</p>
 
       <section class="features">
         <div><h3>🧹 清洗乱码与广告</h3><p>识别整行乱码、锟斤拷类错码、站点水印与推广语，并还原被误解码的文字。</p></div>
         <div><h3>🔗 去除网址</h3><p>覆盖 http 链接、www 域名、全角域名以及 "xxx点com"、"w w w . x x . c o m" 等混淆写法。</p></div>
         <div><h3>📐 自动排版</h3><p>合并硬换行断句、压缩空行、统一段首缩进，可选半角标点转全角。</p></div>
         <div><h3>🔖 多格式分章</h3><p>第N章/节/回/话、第N卷、楔子番外、Chapter N、编号标题、符号标题，支持自定义正则。</p></div>
+        <div><h3>🩹 补回漏掉的章</h3><p>按章节号连号校验，把换了写法、被并进上一章的章节自动切出来，并报告确实缺失的章号。</p></div>
+        <div><h3>📚 多格式导入</h3><p>TXT、EPUB（读自带目录）、PDF（提取文字）均可导入，还能一键把整个文件夹的书入库。</p></div>
         <div><h3>⚡ 任意跳章</h3><p>目录点击、章节号直达、上一章/下一章、全文搜索定位，快捷键左右方向键翻章。</p></div>
-        <div><h3>🌙 阅读体验</h3><p>四套主题、字号行距页宽字体自定义、自动记忆阅读进度与位置。</p></div>
+        <div><h3>🌊 无缝滚动</h3><p>上下滚动自动接上下一章 / 上一章，也可切换成一章一页；进度与位置自动记忆。</p></div>
+        <div><h3>🌙 阅读体验</h3><p>四套主题、字号行距页宽字体自定义、自动滚动、导出排版后的干净 TXT。</p></div>
       </section>
     </section>
 
@@ -68,6 +77,8 @@
         <h2 class="chapter-title" id="chapter-title"></h2>
         <div class="chapter-body" id="chapter-body"></div>
       </article>
+      <div class="chapter-flow hidden" id="chapter-flow"></div>
+      <div class="flow-tip hidden" id="flow-tip">已到全书结尾</div>
       <nav class="chapter-nav">
         <button class="ghost-btn" id="btn-prev">← 上一章</button>
         <div class="jump-inline">
@@ -118,6 +129,13 @@
         <button data-theme-value="night">夜间</button>
       </div>
     </div>
+    <div class="field">
+      <label>阅读模式</label>
+      <div class="theme-row" id="mode-row">
+        <button data-mode-value="scroll">上下无缝滚动</button>
+        <button data-mode-value="paged">一章一页</button>
+      </div>
+    </div>
     <div class="field"><label>字号 <span class="val" id="val-fontSize"></span></label>
       <input type="range" id="set-fontSize" min="14" max="36" step="1"></div>
     <div class="field"><label>行距 <span class="val" id="val-lineHeight"></span></label>
@@ -151,6 +169,7 @@
       <ul>
         <li><kbd>←</kbd> / <kbd>→</kbd> 上一章 / 下一章</li>
         <li><kbd>T</kbd> 目录　<kbd>S</kbd> 设置　<kbd>G</kbd> 跳章</li>
+        <li>无缝滚动模式下，上下滚动会自动接上相邻章节</li>
         <li><kbd>+</kbd> / <kbd>-</kbd> 字号　<kbd>Esc</kbd> 关闭面板</li>
       </ul>
     </div>
@@ -195,6 +214,13 @@
 
         <section>
           <h4>章节划分规则</h4>
+          <div class="field" id="source-field" hidden>
+            <label for="opt-source">章节来源</label>
+            <select id="opt-source">
+              <option value="native">用电子书自带目录</option>
+              <option value="rules">忽略自带目录，按下面的规则识别</option>
+            </select>
+          </div>
           <div class="rule-list" id="rule-list"></div>
           <div class="field"><label for="opt-custom">自定义正则（匹配整行标题）</label>
             <input type="text" id="opt-custom" placeholder="例如：^卷[一二三]\s*·\s*.+$"></div>
@@ -205,9 +231,12 @@
               <input type="number" id="opt-fallbackLines" min="20" max="2000" step="10"></div>
           </div>
           <label class="check"><input type="checkbox" id="opt-autoFallback"> 识别不到章节时按行数自动分章</label>
+          <label class="check"><input type="checkbox" id="opt-repairMissing">
+            按章节号连号补切漏掉的章（例如第 123、689 章换了写法被并进上一章）</label>
           <div class="row">
             <button class="ghost-btn" id="btn-auto-detect">自动识别分章方式</button>
           </div>
+          <div class="muted small" id="repair-stats"></div>
           <div class="muted small" id="rule-stats"></div>
         </section>
       </div>
@@ -249,6 +278,22 @@
       <div class="grow"></div>
       <button class="ghost-btn" id="paste-cancel">取消</button>
       <button class="primary-btn" id="paste-confirm">下一步</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="batch-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong id="batch-title">正在批量导入</strong></div>
+    <div class="modal-body">
+      <div class="book-progress"><i id="batch-bar"></i></div>
+      <p class="muted small" id="batch-status">准备中…</p>
+      <ol class="batch-list" id="batch-list"></ol>
+    </div>
+    <div class="modal-foot">
+      <div class="grow"></div>
+      <button class="ghost-btn" id="batch-cancel">停止</button>
+      <button class="primary-btn hidden" id="batch-done">完成</button>
     </div>
   </div>
 </div>

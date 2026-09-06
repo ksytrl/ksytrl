@@ -66,6 +66,8 @@ export const DEFAULT_SPLIT_OPTIONS = {
   maxTitleLength: 40,
   fallbackLines: 300,
   autoFallback: true,
+  repairMissing: true,  // 按章节号连续性把"漏掉的章"从正文里补切出来
+  repairMaxGap: 100,    // 单个缺口最多补多少章，避免异常文本被切碎
 };
 
 function compile(pattern, flags) {
@@ -216,14 +218,188 @@ export function splitChapters(text, options = {}) {
 
   const realChapters = chapters.filter((c) => c.charCount > 0 || c.level === 1);
   if (realChapters.length >= 2) {
-    return { chapters: realChapters, ruleIds: rules.map((r) => r.id), usedFallback: false };
+    const repair = opts.repairMissing
+      ? repairChapters(realChapters, opts)
+      : { chapters: realChapters, inserted: 0, filled: [], stillMissing: [] };
+    return {
+      chapters: repair.chapters,
+      ruleIds: rules.map((r) => r.id),
+      usedFallback: false,
+      repair: { inserted: repair.inserted, filled: repair.filled, stillMissing: repair.stillMissing },
+    };
   }
   if (opts.autoFallback) {
-    return { chapters: fallbackSplit(text, opts.fallbackLines), ruleIds: [], usedFallback: true };
+    return {
+      chapters: fallbackSplit(text, opts.fallbackLines),
+      ruleIds: [],
+      usedFallback: true,
+      repair: { inserted: 0, filled: [], stillMissing: [] },
+    };
   }
   return {
     chapters: realChapters.length ? realChapters : [makeChapter('正文', lines, 2, 0)],
     ruleIds: rules.map((r) => r.id),
     usedFallback: false,
+    repair: { inserted: 0, filled: [], stillMissing: [] },
+  };
+}
+
+/* =========================================================
+ * 章节号解析 与 缺章补切
+ * 场景：整本大部分章节用「第123章」，个别章节写成「123」「(123)」「第123節」等
+ * 其它写法，没被主规则匹配到，于是那几章被并进了上一章里。
+ * 这里按章节号的连续性找出缺口，再用宽松规则回到正文里把它们切出来。
+ * =======================================================*/
+
+const CN_DIGITS = { 零: 0, 〇: 0, 一: 1, 壹: 1, 二: 2, 贰: 2, 两: 2, 三: 3, 叁: 3, 四: 4, 肆: 4, 五: 5, 伍: 5, 六: 6, 陆: 6, 七: 7, 柒: 7, 八: 8, 捌: 8, 九: 9, 玖: 9 };
+const CN_UNITS = { 十: 10, 拾: 10, 百: 100, 佰: 100, 千: 1000, 仟: 1000, 万: 10000 };
+// 数字后面跟这些字，多半是"2008年""三十岁"这类正文，不是章节号
+const NOT_CHAPTER_SUFFIX = /^[年月日号时分秒岁个人只条种次件元米克斤章回话節节]?[年月日号时分秒岁]/;
+
+/** 中文 / 全角 / 阿拉伯数字 → 整数，无法解析返回 null */
+export function cnToNumber(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const half = s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  if (/^[0-9]{1,6}$/.test(half)) return Number(half);
+  let total = 0;
+  let section = 0;
+  let num = 0;
+  for (const ch of s) {
+    if (ch in CN_DIGITS) {
+      num = CN_DIGITS[ch];
+    } else if (ch in CN_UNITS) {
+      const unit = CN_UNITS[ch];
+      if (unit === 10000) {
+        section = (section + num) * unit;
+        total += section;
+        section = 0;
+      } else {
+        section += (num === 0 ? 1 : num) * unit;
+      }
+      num = 0;
+    } else {
+      return null;
+    }
+  }
+  const value = total + section + num;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** 从标题行里解析章节号（标准写法） */
+export function parseChapterNumber(title) {
+  const text = (title || '').trim();
+  if (!text) return null;
+  let m = text.match(/第\s*([0-9０-９零〇一二三四五六七八九十百千两万壹贰叁肆伍陆柒捌玖拾佰仟]{1,12})\s*[章节節回话話集幕折]/);
+  if (m) return cnToNumber(m[1]);
+  m = text.match(/^(?:chapter|chap\.?|part|episode|section)\s*([0-9]{1,6})\b/i);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+/**
+ * 宽松解析：这一行"看起来是第几章"。
+ * 覆盖 `123`、`123.`、`(123)`、`【123】`、`123 标题`、`第123節`、`一二三、标题` 等写法。
+ */
+export function looseChapterNumber(line, maxTitleLength = 60) {
+  const text = (line || '').trim();
+  if (!text || text.length > maxTitleLength) return null;
+  const strict = parseChapterNumber(text);
+  if (strict != null) return strict;
+
+  const body = text.replace(/^[\s　（(【\[「『<《]+/, '').replace(/^第/, '');
+  let m = body.match(/^([0-9０-９]{1,6})\s*(?:[章节節回话話集幕折])?\s*([)）】\]」』>》]|[、.．,，:：\-—–~～]|\s|$)(.*)$/);
+  if (m) {
+    const rest = `${m[2] || ''}${m[3] || ''}`.trim();
+    if (NOT_CHAPTER_SUFFIX.test(rest)) return null;
+    return cnToNumber(m[1]);
+  }
+  m = body.match(/^([零〇一二三四五六七八九十百千两壹贰叁肆伍陆柒捌玖拾佰仟]{1,10})\s*(?:[章节節回话話集幕折])?\s*(?:[)）】\]」』]|[、.．,，:：\-—–]|\s|$)/);
+  if (m) return cnToNumber(m[1]);
+  return null;
+}
+
+/** 用于排版时保护"没被规则识别出来的疑似标题行"，避免被合并进正文 */
+export function looksLikeLooseHeading(line, maxTitleLength = 40) {
+  const text = (line || '').trim();
+  if (!text || text.length > maxTitleLength) return false;
+  if (/[。！？；]$/.test(text)) return false;
+  if (/["“”]/.test(text)) return false;
+  return looseChapterNumber(text, maxTitleLength) != null;
+}
+
+function sliceChapter(source, lines, from, to, title, level, repaired) {
+  const chapter = makeChapter(title, lines.slice(from, to), level, (source.startLine || 0) + from);
+  if (repaired) chapter.repaired = true;
+  return chapter;
+}
+
+/**
+ * 在一章正文里找出这些章节号对应的标题行，并切成多章。
+ * @returns {{parts: Array, found: number[]}}
+ */
+function splitByMissingNumbers(chapter, wanted, maxTitleLength) {
+  const lines = chapter.content.split('\n');
+  const boundaries = [];
+  let k = 0;
+  for (let i = 0; i < lines.length && k < wanted.length; i += 1) {
+    const num = looseChapterNumber(lines[i], maxTitleLength);
+    if (num == null) continue;
+    if (num === wanted[k]) {
+      boundaries.push({ line: i, num, title: lines[i].trim() });
+      k += 1;
+    }
+  }
+  if (!boundaries.length) return { parts: [chapter], found: [] };
+
+  const parts = [];
+  const head = sliceChapter(chapter, lines, 0, boundaries[0].line, chapter.title, chapter.level, false);
+  parts.push(head);
+  for (let b = 0; b < boundaries.length; b += 1) {
+    const start = boundaries[b].line;
+    const end = b + 1 < boundaries.length ? boundaries[b + 1].line : lines.length;
+    parts.push(sliceChapter(chapter, lines, start + 1, end, boundaries[b].title, 2, true));
+  }
+  return { parts, found: boundaries.map((b) => b.num) };
+}
+
+/**
+ * 按章节号连续性修复缺章。
+ * @param {Array} chapters splitChapters 的结果
+ * @returns {{chapters: Array, inserted: number, filled: number[], stillMissing: number[]}}
+ */
+export function repairChapters(chapters, options = {}) {
+  const opts = { ...DEFAULT_SPLIT_OPTIONS, ...options };
+  const maxTitleLength = Math.max(opts.maxTitleLength || 40, 60);
+  const maxGap = opts.repairMaxGap || 100;
+  const seqs = chapters.map((c) => (c.level === 1 ? null : parseChapterNumber(c.title)));
+  const out = [];
+  const filled = [];
+  const stillMissing = [];
+
+  for (let i = 0; i < chapters.length; i += 1) {
+    const chapter = chapters[i];
+    const seq = seqs[i];
+    if (seq == null) { out.push(chapter); continue; }
+
+    let j = i + 1;
+    while (j < chapters.length && seqs[j] == null) j += 1;
+    const nextSeq = j < chapters.length ? seqs[j] : null;
+    if (nextSeq == null || nextSeq - seq <= 1 || nextSeq - seq > maxGap) { out.push(chapter); continue; }
+
+    const wanted = [];
+    for (let n = seq + 1; n < nextSeq; n += 1) wanted.push(n);
+    const { parts, found } = splitByMissingNumbers(chapter, wanted, maxTitleLength);
+    out.push(...parts);
+    filled.push(...found);
+    for (const n of wanted) if (!found.includes(n)) stillMissing.push(n);
+  }
+
+  return {
+    chapters: out,
+    inserted: out.length - chapters.length,
+    filled,
+    stillMissing,
   };
 }

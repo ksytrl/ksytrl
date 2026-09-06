@@ -7,7 +7,9 @@
  *  4) 合并被硬换行打断的段落、压缩空行、统一段首缩进
  */
 
-import { looksLikeHeading, compileRules, DEFAULT_SPLIT_OPTIONS } from './chapters.js';
+import {
+  looksLikeHeading, looksLikeLooseHeading, compileRules, DEFAULT_SPLIT_OPTIONS,
+} from './chapters.js';
 
 export const CLEAN_DEFAULTS = {
   removeUrls: true,        // 删除网址
@@ -42,9 +44,9 @@ const URL_PATTERNS = [
   // 协议开头
   /(?:https?|ftp|thunder|ed2k):\/\/[^\s，。！？、；："'“”‘’）】》]+/gi,
   // www. / wap. / m. 开头
-  /\b(?:www|wap|m|3w|bbs|book|txt|www\d)[.．。][a-z0-9-]+(?:[.．。][a-z0-9-]{2,})+(?:\/[^\s，。！？"'）】》]*)?/gi,
+  /(?<![a-z0-9])(?:www|wap|m|3w|bbs|book|txt|www\d)[.．。][a-z0-9-]+(?:[.．。][a-z0-9-]{2,})+(?:\/[^\s，。！？"'）】》]*)?/gi,
   // 裸域名 + 常见顶级域
-  /\b[a-z0-9-]{2,}(?:[.．。][a-z0-9-]{2,})*[.．。](?:com|cn|net|org|cc|xyz|top|info|tv|me|la|biz|vip|shop|club|site|online|pro|ink|fun|wang|ltd|co|io|us|hk|tw|mobi|icu|space)(?:\.[a-z]{2})?\b(?:\/[^\s，。！？"'）】》]*)?/gi,
+  /(?<![a-z0-9])[a-z0-9-]{2,}(?:[.．。][a-z0-9-]{2,})*[.．。](?:com|cn|net|org|cc|xyz|top|info|tv|me|la|biz|vip|shop|club|site|online|pro|ink|fun|wang|ltd|co|io|us|hk|tw|mobi|icu|space)(?:\.[a-z]{2})?\b(?:\/[^\s，。！？"'）】》]*)?/gi,
   // 全角网址 ｗｗｗ．ｘｘ．ｃｏｍ
   /[ｗＷ]{2,3}[.．。][ａ-ｚＡ-Ｚ０-９－]+(?:[.．。][ａ-ｚＡ-Ｚ０-９－]+)+/g,
   // 混淆写法：w w w . x x . c o m
@@ -242,7 +244,9 @@ export function cleanText(raw, options = {}, splitOptions = {}) {
         merged.push('');
         continue;
       }
-      if (looksLikeHeading(trimmed, headingOpts)) {
+      // 规则识别到的标题、以及"疑似标题"（例如只写了 123 的那种）都不参与合并，
+      // 否则漏识别的标题会被粘进正文，后面就再也补不回来了
+      if (looksLikeHeading(trimmed, headingOpts) || looksLikeLooseHeading(trimmed, splitOpts.maxTitleLength)) {
         merged.push(trimmed);
         continue;
       }
@@ -250,7 +254,7 @@ export function cleanText(raw, options = {}, splitOptions = {}) {
       while (wrapWidth > 0 && i + 1 < cleaned.length) {
         const next = cleaned[i + 1] ? cleaned[i + 1].trim() : '';
         if (!next) break;
-        if (looksLikeHeading(next, headingOpts)) break;
+        if (looksLikeHeading(next, headingOpts) || looksLikeLooseHeading(next, splitOpts.maxTitleLength)) break;
         if (current.length < wrapWidth) break;
         if (ENDING_PUNCT.test(current)) break;
         if (/^[“"「『]/.test(next)) break;
@@ -292,3 +296,43 @@ export function cleanText(raw, options = {}, splitOptions = {}) {
 }
 
 export const AD_KEYWORD_LIST = AD_KEYWORDS;
+
+/**
+ * 清洗书名：文件名 / 电子书元信息里常带网址、站点名和推广后缀，
+ * 例如「盘龙(www.biquge.com)【完结】.txt」→「盘龙」。
+ */
+export function cleanBookTitle(raw) {
+  let name = String(raw || '').trim();
+  if (!name) return '未命名小说';
+  name = name.replace(/\.(txt|text|epub|pdf|html?|umd|azw3?|mobi)$/i, '');
+  name = name.replace(/[_]+/g, ' ');   // 下划线常被用来拼接站点名
+  // 先去掉整段网址
+  const stats = { urlsRemoved: 0 };
+  name = stripUrls(name, stats);
+  // 括号里只剩站点 / 推广字样的，整块去掉
+  name = name.replace(/[（(【\[「{][^）)】\]」}]{0,40}[）)】\]」}]/g, (block) => {
+    const inner = block.slice(1, -1).trim();
+    if (!inner) return '';   // 括号里原本是网址，去完就空了
+    const siteish = /(网|阁|书屋|书城|书院|书站|书库|书吧|文学|小说|下载|txt|首发|独家|手打|论坛|贴吧|整理|校对|精校|完结|全本|更新|连载|免费|无弹窗)/i;
+    return siteish.test(inner) ? '' : block;
+  });
+  // 常见推广后缀 / 前缀
+  const junk = [
+    '最新章节', '全本', '全集', '完结', '完本', '精校版', '精校', '校对版', '未删减', '珍藏版',
+    'txt下载', 'txt全集下载', 'txt', '电子书', '免费阅读', '手打', '独家首发', '首发', '整理',
+    '小说网', '书屋', '书城', '文学网', 'novel', 'downloads', 'download',
+  ];
+  for (const word of junk) {
+    name = name.replace(new RegExp(`[\\s\\-_—·|~,，。、【】\\[\\]()（）]*${escapeForRegExp(word)}[\\s\\-_—·|~,，。、【】\\[\\]()（）]*`, 'gi'), ' ');
+  }
+  name = name
+    .replace(/[_]+/g, ' ')
+    .replace(/[\s　]{2,}/g, ' ')
+    .replace(/^[\s\-_—·|~,，。、:：]+|[\s\-_—·|~,，。、:：]+$/g, '')
+    .trim();
+  return name || '未命名小说';
+}
+
+function escapeForRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

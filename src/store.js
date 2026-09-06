@@ -83,6 +83,7 @@ export async function saveBook(meta, content) {
       raw: content.raw,
       clean: content.clean,
       chapterTexts: content.chapterTexts || [],
+      nativeChapters: content.nativeChapters || null,
     });
   });
   return meta;
@@ -102,6 +103,7 @@ export async function deleteBook(id) {
 
 export const DEFAULT_SETTINGS = {
   theme: 'sepia',
+  readingMode: 'scroll',   // 'scroll' = 上下无缝滚动，'paged' = 一章一页
   fontSize: 20,
   lineHeight: 1.9,
   letterSpacing: 0,
