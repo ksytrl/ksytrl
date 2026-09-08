@@ -4,9 +4,10 @@
  */
 
 const DB_NAME = 'novel-reader';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_BOOKS = 'books';
 const STORE_CONTENT = 'contents';
+const STORE_MARKS = 'marks';   // 书签与笔记
 const SETTINGS_KEY = 'novel-reader:settings';
 
 let dbPromise = null;
@@ -22,6 +23,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains(STORE_CONTENT)) {
         db.createObjectStore(STORE_CONTENT, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_MARKS)) {
+        db.createObjectStore(STORE_MARKS, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -95,14 +99,38 @@ export async function updateBook(meta) {
 }
 
 export async function deleteBook(id) {
-  await tx([STORE_BOOKS, STORE_CONTENT], 'readwrite', ([books, contents]) => {
+  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS], 'readwrite', ([books, contents, marks]) => {
     books.delete(id);
     contents.delete(id);
+    marks.delete(id);
   });
+}
+
+/* ---------------- 书签与笔记 ---------------- */
+
+/** @returns {Promise<Array>} 该书的书签 / 笔记列表 */
+export async function getMarks(bookId) {
+  const row = await tx(STORE_MARKS, 'readonly', (store) => reqValue(store.get(bookId)));
+  return (row && row.items) || [];
+}
+
+export async function saveMarks(bookId, items) {
+  await tx(STORE_MARKS, 'readwrite', (store) => store.put({ id: bookId, items }));
+  return items;
+}
+
+/** 所有书的笔记数量，书架上用来显示角标 */
+export async function markCounts() {
+  const rows = await tx(STORE_MARKS, 'readonly', (store) => reqValue(store.getAll()));
+  const map = new Map();
+  for (const row of rows || []) map.set(row.id, (row.items || []).length);
+  return map;
 }
 
 export const DEFAULT_SETTINGS = {
   theme: 'sepia',
+  shelfSort: 'recent',      // recent | title | created
+  shelfCategory: '',        // 书架当前筛选的分类，空 = 全部
   readingMode: 'scroll',   // 'scroll' = 上下无缝滚动，'paged' = 一章一页
   fontSize: 20,
   lineHeight: 1.9,

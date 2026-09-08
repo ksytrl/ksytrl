@@ -274,7 +274,56 @@ kbd {
 .batch-list li.fail { color: var(--danger); }
 #batch-modal .book-progress { height: 6px; }
 
+/* ===== 书架工具条与分类 ===== */
+.shelf-tools { display: flex; gap: 10px; margin: 0 0 12px; }
+.shelf-tools input[type="search"] { flex: 1; }
+.shelf-tools select { width: 150px; }
+.category-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.cat-chip {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  border-radius: 999px; padding: 5px 12px; font-size: 13px; cursor: pointer;
+}
+.cat-chip:hover { border-color: var(--accent); color: var(--accent); }
+.cat-chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.cat-chip .n { opacity: .7; margin-left: 4px; font-size: 12px; }
+.book-card .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.book-card .tag {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border);
+}
+.book-card .tag.mark { color: var(--accent); border-color: var(--accent); }
+.shelf-group-title { margin: 22px 0 10px; font-size: 14px; color: var(--text-dim); }
+
+/* ===== 书签与笔记 ===== */
+.mark-item { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.mark-item:hover { background: var(--accent-soft); }
+.mark-item .where { color: var(--accent); font-size: 12px; margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
+.mark-item .where .kind {
+  font-size: 11px; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; color: var(--text-dim);
+}
+.mark-item .quote { font-size: 13px; line-height: 1.7; color: var(--text); }
+.mark-item .note { font-size: 13px; line-height: 1.7; color: var(--text-dim); margin-top: 6px; white-space: pre-wrap; }
+.mark-item .ops { display: flex; gap: 8px; margin-top: 8px; }
+.mark-item .ops button { font-size: 12px; padding: 3px 8px; }
+.note-quote {
+  margin: 0 0 14px; padding: 10px 12px; border-left: 3px solid var(--accent);
+  background: var(--surface-2); border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.8; color: var(--text-dim);
+  max-height: 160px; overflow: auto;
+}
+.sel-pop {
+  position: absolute; z-index: 70; display: flex; gap: 6px; padding: 6px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+}
+.sel-pop button { font-size: 13px; padding: 5px 10px; }
+.chapter-body .note-hl, .flow-body .note-hl {
+  background: linear-gradient(transparent 62%, var(--accent-soft) 62%);
+  border-bottom: 1px dashed var(--accent);
+}
+
 </style>
+
+<meta name="theme-color" content="#9a6a3a">
+
 </head>
 <body>
 <div class="app">
@@ -287,7 +336,9 @@ kbd {
     <div class="topbar-actions">
       <button class="ghost-btn" id="btn-shelf" title="书架">书架</button>
       <button class="ghost-btn" id="btn-retypeset" title="重新排版 / 重新分章" hidden>重新排版</button>
+      <button class="ghost-btn" id="btn-marks" title="书签与笔记 (B)" hidden>书签</button>
       <button class="ghost-btn" id="btn-export" title="导出清洗后的 TXT" hidden>导出</button>
+      <button class="ghost-btn" id="btn-install" title="安装到桌面 / 主屏幕" hidden>安装</button>
       <button class="icon-btn" id="btn-settings" title="阅读设置 (S)" aria-label="阅读设置">Aa</button>
     </div>
   </header>
@@ -324,6 +375,16 @@ kbd {
         <h2>我的书架</h2>
         <span class="muted" id="shelf-count"></span>
       </div>
+      <div class="shelf-tools">
+        <input type="search" id="shelf-search" placeholder="搜索书名 / 分类">
+        <select id="shelf-sort">
+          <option value="recent">最近阅读</option>
+          <option value="created">最近导入</option>
+          <option value="title">按书名</option>
+          <option value="progress">按阅读进度</option>
+        </select>
+      </div>
+      <div class="category-bar" id="category-bar"></div>
       <div class="book-grid" id="book-grid"></div>
       <p class="empty-tip" id="shelf-empty">书架还是空的，先导入一本书吧（TXT / EPUB / PDF，或一整个文件夹）。</p>
 
@@ -336,6 +397,9 @@ kbd {
         <div><h3>📚 多格式导入</h3><p>TXT、EPUB（读自带目录）、PDF（提取文字）均可导入，还能一键把整个文件夹的书入库。</p></div>
         <div><h3>⚡ 任意跳章</h3><p>目录点击、章节号直达、上一章/下一章、全文搜索定位，快捷键左右方向键翻章。</p></div>
         <div><h3>🌊 无缝滚动</h3><p>上下滚动自动接上下一章 / 上一章，也可切换成一章一页；进度与位置自动记忆。</p></div>
+        <div><h3>🔖 书签与笔记</h3><p>任意位置加书签，选中正文写笔记并自动高亮，可按章节浏览、跳转与导出。</p></div>
+        <div><h3>🗂️ 书架分组</h3><p>按分类分组与搜索；导入文件夹时自动按子目录名建立分类。</p></div>
+        <div><h3>📲 可安装 (PWA)</h3><p>可装到桌面或手机主屏，断网也能打开继续读。</p></div>
         <div><h3>🌙 阅读体验</h3><p>四套主题、字号行距页宽字体自定义、自动滚动、导出排版后的干净 TXT。</p></div>
       </section>
     </section>
@@ -438,6 +502,7 @@ kbd {
       <ul>
         <li><kbd>←</kbd> / <kbd>→</kbd> 上一章 / 下一章</li>
         <li><kbd>T</kbd> 目录　<kbd>S</kbd> 设置　<kbd>G</kbd> 跳章</li>
+        <li><kbd>B</kbd> 书签与笔记　<kbd>D</kbd> 在当前位置加书签</li>
         <li>无缝滚动模式下，上下滚动会自动接上相邻章节</li>
         <li><kbd>+</kbd> / <kbd>-</kbd> 字号　<kbd>Esc</kbd> 关闭面板</li>
       </ul>
@@ -445,7 +510,48 @@ kbd {
   </div>
 </aside>
 
+<!-- ============ 书签 / 笔记 ============ -->
+<aside class="panel panel-right hidden" id="marks-panel" aria-label="书签与笔记">
+  <div class="panel-head">
+    <strong>书签与笔记</strong>
+    <button class="icon-btn" data-close-panel="marks-panel" aria-label="关闭">✕</button>
+  </div>
+  <div class="panel-tools">
+    <div class="row">
+      <button class="primary-btn" id="btn-add-bookmark">在当前位置加书签</button>
+      <button class="ghost-btn" id="btn-export-marks">导出</button>
+    </div>
+    <div class="muted small">在正文里选中一段文字，就能把它存成笔记。</div>
+  </div>
+  <div class="toc-list" id="marks-list"></div>
+</aside>
+
 <div class="overlay hidden" id="overlay"></div>
+
+<!-- 选中文字后的浮层 -->
+<div class="sel-pop hidden" id="sel-pop">
+  <button class="ghost-btn" id="sel-note">写笔记</button>
+  <button class="ghost-btn" id="sel-mark">存为书签</button>
+</div>
+
+<!-- 笔记编辑弹窗 -->
+<div class="modal hidden" id="note-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong id="note-title">写笔记</strong>
+      <button class="icon-btn" id="note-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <blockquote class="note-quote" id="note-quote"></blockquote>
+      <div class="field"><label for="note-text">笔记内容</label>
+        <textarea id="note-text" rows="6" placeholder="写点什么……"></textarea></div>
+    </div>
+    <div class="modal-foot">
+      <button class="ghost-btn danger hidden" id="note-delete">删除</button>
+      <div class="grow"></div>
+      <button class="ghost-btn" id="note-cancel">取消</button>
+      <button class="primary-btn" id="note-save">保存</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============ 导入 / 重新排版 弹窗 ============ -->
 <div class="modal hidden" id="import-modal" role="dialog" aria-modal="true">
@@ -460,6 +566,10 @@ kbd {
           <h4>基本信息</h4>
           <div class="field"><label for="import-name">书名</label>
             <input type="text" id="import-name"></div>
+          <div class="field"><label for="import-category">分类（书架分组）</label>
+            <input type="text" id="import-category" list="category-options" placeholder="未分类">
+            <datalist id="category-options"></datalist>
+          </div>
           <div class="field"><label for="import-encoding">文本编码</label>
             <select id="import-encoding"></select>
             <div class="muted small" id="import-encoding-hint"></div>
@@ -2147,9 +2257,10 @@ async function parsePdf(buffer) {
  */
 
 const DB_NAME = 'novel-reader';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_BOOKS = 'books';
 const STORE_CONTENT = 'contents';
+const STORE_MARKS = 'marks';   // 书签与笔记
 const SETTINGS_KEY = 'novel-reader:settings';
 
 let dbPromise = null;
@@ -2165,6 +2276,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains(STORE_CONTENT)) {
         db.createObjectStore(STORE_CONTENT, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_MARKS)) {
+        db.createObjectStore(STORE_MARKS, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -2238,14 +2352,38 @@ async function updateBook(meta) {
 }
 
 async function deleteBook(id) {
-  await tx([STORE_BOOKS, STORE_CONTENT], 'readwrite', ([books, contents]) => {
+  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS], 'readwrite', ([books, contents, marks]) => {
     books.delete(id);
     contents.delete(id);
+    marks.delete(id);
   });
+}
+
+/* ---------------- 书签与笔记 ---------------- */
+
+/** @returns {Promise<Array>} 该书的书签 / 笔记列表 */
+async function getMarks(bookId) {
+  const row = await tx(STORE_MARKS, 'readonly', (store) => reqValue(store.get(bookId)));
+  return (row && row.items) || [];
+}
+
+async function saveMarks(bookId, items) {
+  await tx(STORE_MARKS, 'readwrite', (store) => store.put({ id: bookId, items }));
+  return items;
+}
+
+/** 所有书的笔记数量，书架上用来显示角标 */
+async function markCounts() {
+  const rows = await tx(STORE_MARKS, 'readonly', (store) => reqValue(store.getAll()));
+  const map = new Map();
+  for (const row of rows || []) map.set(row.id, (row.items || []).length);
+  return map;
 }
 
 const DEFAULT_SETTINGS = {
   theme: 'sepia',
+  shelfSort: 'recent',      // recent | title | created
+  shelfCategory: '',        // 书架当前筛选的分类，空 = 全部
   readingMode: 'scroll',   // 'scroll' = 上下无缝滚动，'paged' = 一章一页
   fontSize: 20,
   lineHeight: 1.9,
@@ -2311,6 +2449,9 @@ const state = {
   autoScrollTimer: null,
   pending: null,       // 导入 / 重新排版的临时数据
   flow: null,          // 无缝滚动模式下已加载的章节区间
+  marks: [],           // 当前书的书签与笔记
+  markCounts: new Map(),
+  editingMark: null,
   nativeChapters: null,// 电子书自带目录
   batchAbort: false,
 };
@@ -2338,6 +2479,7 @@ function applySettings() {
   ['fontSize', 'lineHeight', 'letterSpacing', 'paragraphSpacing', 'pageWidth', 'autoScrollSpeed']
     .forEach((k) => { $(`set-${k}`).value = s[k]; });
   $('set-fontFamily').value = s.fontFamily;
+  $('shelf-sort').value = s.shelfSort || 'recent';
   [...$('theme-row').children].forEach((b) => b.classList.toggle('active', b.dataset.themeValue === s.theme));
   [...$('mode-row').children].forEach((b) => b.classList.toggle('active', b.dataset.modeValue === (s.readingMode || 'scroll')));
   saveSettings(s);
@@ -2401,64 +2543,191 @@ function openPanel(id) {
 function closePanels() {
   $('toc-panel').classList.add('hidden');
   $('settings-panel').classList.add('hidden');
+  $('marks-panel').classList.add('hidden');
   $('overlay').classList.add('hidden');
 }
 function showModal(id) { $(id).classList.remove('hidden'); }
 function hideModal(id) { $(id).classList.add('hidden'); }
 
 /* =========================================================
- * 书架
+ * 书架：分类、搜索、排序
  * =======================================================*/
+const UNCATEGORIZED = '未分类';
+
+function bookCategory(book) {
+  return (book.category || '').trim() || UNCATEGORIZED;
+}
+
+function allCategories() {
+  const map = new Map();
+  for (const book of state.books) {
+    const cat = bookCategory(book);
+    map.set(cat, (map.get(cat) || 0) + 1);
+  }
+  return [...map.entries()]
+    .sort((a, b) => (a[0] === UNCATEGORIZED ? 1 : b[0] === UNCATEGORIZED ? -1 : b[1] - a[1] || a[0].localeCompare(b[0], 'zh')));
+}
+
+function bookPercent(book) {
+  if (!book.progress || !book.chapterCount || !book.lastReadAt) return 0;
+  return Math.min(100, Math.round(((book.progress.chapterIndex + 1) / book.chapterCount) * 100));
+}
+
+function sortBooks(books) {
+  const mode = state.settings.shelfSort || 'recent';
+  const copy = [...books];
+  if (mode === 'title') copy.sort((a, b) => a.title.localeCompare(b.title, 'zh'));
+  else if (mode === 'created') copy.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  else if (mode === 'progress') copy.sort((a, b) => bookPercent(b) - bookPercent(a));
+  else copy.sort((a, b) => (b.lastReadAt || b.createdAt || 0) - (a.lastReadAt || a.createdAt || 0));
+  return copy;
+}
+
 async function refreshShelf() {
   state.books = await listBooks();
+  try { state.markCounts = await markCounts(); } catch { state.markCounts = new Map(); }
+  renderShelf();
+  refreshCategoryOptions();
+}
+
+function refreshCategoryOptions() {
+  const list = $('category-options');
+  list.innerHTML = '';
+  for (const [name] of allCategories()) {
+    if (name === UNCATEGORIZED) continue;
+    const opt = document.createElement('option');
+    opt.value = name;
+    list.appendChild(opt);
+  }
+}
+
+function makeBookCard(book) {
+  const card = el('div', 'book-card');
+  card.dataset.id = book.id;
+  card.appendChild(el('h3', null, book.title));
+
+  const tags = el('div', 'tags');
+  tags.appendChild(el('span', 'tag', bookCategory(book)));
+  const kindLabel = { epub: 'EPUB', pdf: 'PDF', paste: '粘贴' }[book.kind];
+  if (kindLabel) tags.appendChild(el('span', 'tag', kindLabel));
+  const marks = (state.markCounts && state.markCounts.get(book.id)) || 0;
+  if (marks) tags.appendChild(el('span', 'tag mark', `${marks} 条笔记/书签`));
+  card.appendChild(tags);
+
+  const percent = bookPercent(book);
+  const meta = el('div', 'book-meta');
+  meta.innerHTML = `${fmtNum(book.chapterCount)} 章 · ${fmtNum(book.charCount)} 字 · 已读 ${percent}%<br>`
+    + `${book.lastReadAt ? `上次阅读：${new Date(book.lastReadAt).toLocaleString('zh-CN')}` : '尚未阅读'}`;
+  card.appendChild(meta);
+
+  const bar = el('div', 'book-progress');
+  const inner = el('i');
+  inner.style.width = `${percent}%`;
+  bar.appendChild(inner);
+  card.appendChild(bar);
+
+  const actions = el('div', 'book-actions');
+  const readBtn = el('button', 'primary-btn', book.progress && book.lastReadAt ? '继续阅读' : '开始阅读');
+  readBtn.addEventListener('click', (e) => { e.stopPropagation(); openBook(book.id); });
+  const catBtn = el('button', 'ghost-btn', '分类');
+  catBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const next = prompt(`把《${book.title}》放到哪个分类？`, bookCategory(book));
+    if (next == null) return;
+    book.category = next.trim() === UNCATEGORIZED ? '' : next.trim();
+    await updateBook(book);
+    await refreshShelf();
+    toast(`已移动到「${bookCategory(book)}」`);
+  });
+  const delBtn = el('button', 'ghost-btn danger', '删除');
+  delBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`确定要从书架删除《${book.title}》吗？`)) return;
+    await deleteBook(book.id);
+    if (state.book && state.book.id === book.id) showShelf();
+    else refreshShelf();
+    toast('已删除');
+  });
+  actions.append(readBtn, catBtn, delBtn);
+  card.appendChild(actions);
+  card.addEventListener('click', () => openBook(book.id));
+  return card;
+}
+
+function renderShelf() {
+  const query = ($('shelf-search').value || '').trim().toLowerCase();
+  const activeCat = state.settings.shelfCategory || '';
   const grid = $('book-grid');
   grid.innerHTML = '';
-  $('shelf-count').textContent = state.books.length ? `共 ${state.books.length} 本` : '';
+
+  // 分类筛选条
+  const bar = $('category-bar');
+  bar.innerHTML = '';
+  const cats = allCategories();
+  if (cats.length > 1) {
+    const all = el('button', `cat-chip${activeCat ? '' : ' active'}`);
+    all.innerHTML = `全部<span class="n">${state.books.length}</span>`;
+    all.addEventListener('click', () => {
+      state.settings.shelfCategory = '';
+      saveSettings(state.settings);
+      renderShelf();
+    });
+    bar.appendChild(all);
+    for (const [name, count] of cats) {
+      const chip = el('button', `cat-chip${activeCat === name ? ' active' : ''}`);
+      chip.innerHTML = `${escapeHtml(name)}<span class="n">${count}</span>`;
+      chip.addEventListener('click', () => {
+        state.settings.shelfCategory = activeCat === name ? '' : name;
+        saveSettings(state.settings);
+        renderShelf();
+      });
+      bar.appendChild(chip);
+    }
+  }
+
+  let books = state.books;
+  if (activeCat) books = books.filter((b) => bookCategory(b) === activeCat);
+  if (query) {
+    books = books.filter((b) => b.title.toLowerCase().includes(query)
+      || bookCategory(b).toLowerCase().includes(query));
+  }
+  books = sortBooks(books);
+
+  $('shelf-count').textContent = state.books.length
+    ? `共 ${state.books.length} 本${books.length !== state.books.length ? `，当前显示 ${books.length} 本` : ''}`
+    : '';
   $('shelf-empty').classList.toggle('hidden', state.books.length > 0);
 
-  for (const book of state.books) {
-    const card = el('div', 'book-card');
-    card.appendChild(el('h3', null, book.title));
-    const percent = book.progress && book.chapterCount
-      ? Math.min(100, Math.round(((book.progress.chapterIndex + 1) / book.chapterCount) * 100))
-      : 0;
-    const meta = el('div', 'book-meta');
-    meta.innerHTML = `${fmtNum(book.chapterCount)} 章 · ${fmtNum(book.charCount)} 字<br>`
-      + `编码 ${escapeHtml(book.encoding || '-')} · 已读 ${percent}%<br>`
-      + `${book.lastReadAt ? `上次阅读：${new Date(book.lastReadAt).toLocaleString('zh-CN')}` : '尚未阅读'}`;
-    card.appendChild(meta);
-    const bar = el('div', 'book-progress');
-    const inner = el('i');
-    inner.style.width = `${percent}%`;
-    bar.appendChild(inner);
-    card.appendChild(bar);
-
-    const actions = el('div', 'book-actions');
-    const readBtn = el('button', 'primary-btn', book.progress ? '继续阅读' : '开始阅读');
-    readBtn.addEventListener('click', (e) => { e.stopPropagation(); openBook(book.id); });
-    const delBtn = el('button', 'ghost-btn danger', '删除');
-    delBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!confirm(`确定要从书架删除《${book.title}》吗？`)) return;
-      await deleteBook(book.id);
-      if (state.book && state.book.id === book.id) showShelf();
-      refreshShelf();
-      toast('已删除');
-    });
-    actions.append(readBtn, delBtn);
-    card.appendChild(actions);
-    card.addEventListener('click', () => openBook(book.id));
-    grid.appendChild(card);
+  // 不筛选、不搜索且有多个分类时，按分类分组显示
+  const grouped = !activeCat && !query && cats.length > 1;
+  if (grouped) {
+    for (const [name] of cats) {
+      const inCat = sortBooks(state.books.filter((b) => bookCategory(b) === name));
+      if (!inCat.length) continue;
+      const title = el('h3', 'shelf-group-title', `${name}（${inCat.length}）`);
+      grid.appendChild(title);
+      title.style.gridColumn = '1 / -1';
+      for (const book of inCat) grid.appendChild(makeBookCard(book));
+    }
+  } else {
+    for (const book of books) grid.appendChild(makeBookCard(book));
+    if (!books.length && state.books.length) {
+      const tip = el('p', 'empty-tip', '没有匹配的书');
+      tip.style.gridColumn = '1 / -1';
+      grid.appendChild(tip);
+    }
   }
 }
 
 function showShelf() {
   stopAutoScroll();
   state.book = null;
+  state.marks = [];
   $('view-shelf').classList.remove('hidden');
   $('view-reader').classList.add('hidden');
   $('btn-retypeset').hidden = true;
   $('btn-export').hidden = true;
+  $('btn-marks').hidden = true;
   $('top-book').textContent = '清风阅读';
   $('top-chapter').textContent = '本地小说阅读器 · TXT / EPUB / PDF';
   $('progressbar').style.width = '0';
@@ -2639,6 +2908,7 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
   state.pending = {
     raw,
     name,
+    category: encodingInfo.category || '',
     encoding: encodingInfo.encoding,
     buffer: encodingInfo.buffer || null,
     bookId: existing ? existing.id : null,
@@ -2652,6 +2922,7 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
   $('import-title').textContent = existing ? '重新排版 / 重新分章' : '导入并排版';
   $('import-confirm').textContent = existing ? '保存并重新阅读' : '导入并开始阅读';
   $('import-name').value = name;
+  $('import-category').value = existing ? (existing.category || '') : (state.pending.category || '');
 
   const encSelect = $('import-encoding');
   encSelect.innerHTML = '';
@@ -2741,6 +3012,7 @@ async function confirmImport() {
     splitOptions: pending.splitOptions,
     chapterSource: pending.useNative ? 'native' : 'rules',
     kind: pending.kind || 'txt',
+    category: ($('import-category').value || '').trim(),
     progress: existing && existing.progress
       ? { chapterIndex: Math.min(existing.progress.chapterIndex, chapters.length - 1), ratio: 0 }
       : { chapterIndex: 0, ratio: 0 },
@@ -2765,6 +3037,15 @@ async function confirmImport() {
 }
 
 const SUPPORTED_EXT = /\.(txt|text|epub|pdf)$/i;
+
+/** 从文件的相对路径推断分类：用它所在的那层文件夹名 */
+function categoryFromPath(file) {
+  const path = file.webkitRelativePath || file.__relPath || '';
+  const parts = path.split('/').filter(Boolean);
+  parts.pop();                       // 去掉文件名
+  if (!parts.length) return '';
+  return parts[parts.length - 1];    // 直接所在的文件夹
+}
 
 /** 按扩展名解析成统一的「待导入」结构 */
 async function readBookFile(file) {
@@ -2824,6 +3105,7 @@ async function handleFiles(files, opts = {}) {
     try {
       const info = await readBookFile(list[0]);
       if (!info.raw || !info.raw.replace(/\s/g, '')) { toast(`${list[0].name} 里没有可读的文字`); return; }
+      info.category = categoryFromPath(list[0]);
       openImportModal(info.raw, info.name, info, null, info.native);
     } catch (err) {
       toast(`读取 ${list[0].name} 失败：${err.message}`);
@@ -2880,6 +3162,7 @@ async function batchImport(files) {
         title: info.name,
         encoding: info.encoding,
         kind: info.kind,
+        category: categoryFromPath(file),
         createdAt: Date.now(),
         lastReadAt: 0,
         charCount,
@@ -2899,7 +3182,8 @@ async function batchImport(files) {
       existing.push(meta);
       ok += 1;
       const repaired = split && split.repair && split.repair.inserted ? `，补回 ${split.repair.inserted} 章` : '';
-      listEl.appendChild(el('li', 'ok', `《${info.name}》${chapters.length} 章${repaired}`));
+      const cat = meta.category ? `［${meta.category}］` : '';
+      listEl.appendChild(el('li', 'ok', `${cat}《${info.name}》${chapters.length} 章${repaired}`));
     } catch (err) {
       failed += 1;
       listEl.appendChild(el('li', 'fail', `${file.name}：${err.message}`));
@@ -2923,6 +3207,8 @@ async function filesFromDataTransfer(dt) {
     if (!entry) return;
     if (entry.isFile) {
       const file = await new Promise((res, rej) => entry.file(res, rej));
+      // fullPath 形如 /玄幻/某书.txt，用来推断分类
+      try { file.__relPath = (entry.fullPath || '').replace(/^\//, ''); } catch { /* 只读时忽略 */ }
       out.push(file);
       return;
     }
@@ -2969,7 +3255,10 @@ async function openBook(id) {
   $('view-reader').classList.remove('hidden');
   $('btn-retypeset').hidden = false;
   $('btn-export').hidden = false;
+  $('btn-marks').hidden = false;
   $('top-book').textContent = meta.title;
+  await loadMarks();
+  renderMarks();
   renderToc();
   renderReader(state.chapterIndex, meta.progress ? meta.progress.ratio : 0);
 }
@@ -2986,6 +3275,7 @@ function isScrollMode() {
 /** 把一章正文转成段落 HTML */
 function chapterInnerHtml(index) {
   const text = state.chapterTexts[index] || '';
+  const noteSegments = state.highlight ? [] : noteSegmentsFor(index);
   const html = text.split('\n').map((line) => {
     const t = line.trim();
     if (!t) return '<p class="blank"></p>';
@@ -2993,6 +3283,11 @@ function chapterInnerHtml(index) {
     if (state.highlight) {
       const re = new RegExp(escapeRegExp(state.highlight), 'gi');
       safe = safe.replace(re, (m) => `<mark>${m}</mark>`);
+    } else {
+      for (const seg of noteSegments) {
+        const escaped = escapeHtml(seg);
+        if (safe.includes(escaped)) safe = safe.split(escaped).join(`<span class="note-hl">${escaped}</span>`);
+      }
     }
     return `<p>${safe}</p>`;
   }).join('');
@@ -3211,6 +3506,230 @@ function saveProgress() {
 }
 
 /* =========================================================
+ * 书签与笔记
+ * =======================================================*/
+const markId = () => `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+
+async function loadMarks() {
+  state.marks = state.book ? await getMarks(state.book.id).catch(() => []) : [];
+}
+
+async function persistMarks() {
+  if (!state.book) return;
+  try {
+    await saveMarks(state.book.id, state.marks);
+    state.markCounts.set(state.book.id, state.marks.length);
+  } catch { /* 写入失败时至少界面还是对的 */ }
+}
+
+/** 当前屏幕上第一段文字，作为书签的摘要 */
+function firstVisibleText() {
+  const paragraphs = document.querySelectorAll('#view-reader p');
+  for (const p of paragraphs) {
+    const rect = p.getBoundingClientRect();
+    if (rect.bottom > 150 && rect.top < window.innerHeight && p.textContent.trim()) {
+      return p.textContent.trim().slice(0, 60);
+    }
+  }
+  return '';
+}
+
+function chapterIndexOfNode(node) {
+  const elNode = node && (node.nodeType === 1 ? node : node.parentElement);
+  const section = elNode && elNode.closest ? elNode.closest('.flow-chapter') : null;
+  return section ? Number(section.dataset.index) : state.chapterIndex;
+}
+
+async function addMark(mark) {
+  state.marks.push(mark);
+  await persistMarks();
+  renderMarks();
+  if (mark.chapterIndex === state.chapterIndex || isScrollMode()) refreshNoteHighlights();
+}
+
+async function addBookmark(quote) {
+  if (!state.book) return;
+  const index = state.chapterIndex;
+  await addMark({
+    id: markId(),
+    type: 'bookmark',
+    fromSelection: !!quote,
+    chapterIndex: index,
+    chapterTitle: chapterTitleAt(index),
+    ratio: currentRatio(),
+    quote: (quote || firstVisibleText()).slice(0, 200),
+    note: '',
+    createdAt: Date.now(),
+  });
+  toast(`已在「${chapterTitleAt(index)}」加书签`);
+}
+
+async function deleteMark(id) {
+  state.marks = state.marks.filter((m) => m.id !== id);
+  await persistMarks();
+  renderMarks();
+  refreshNoteHighlights();
+}
+
+function openNoteModal(mark, quote, chapterIndex) {
+  state.editingMark = mark || null;
+  state.pendingNote = mark ? null : { quote, chapterIndex };
+  $('note-title').textContent = mark ? '编辑笔记' : '写笔记';
+  $('note-quote').textContent = mark ? mark.quote : quote;
+  $('note-quote').classList.toggle('hidden', !(mark ? mark.quote : quote));
+  $('note-text').value = mark ? mark.note : '';
+  $('note-delete').classList.toggle('hidden', !mark);
+  showModal('note-modal');
+  setTimeout(() => $('note-text').focus(), 50);
+}
+
+async function saveNoteFromModal() {
+  const text = $('note-text').value.trim();
+  if (state.editingMark) {
+    state.editingMark.note = text;
+    state.editingMark.type = 'note';
+    await persistMarks();
+  } else if (state.pendingNote) {
+    const index = state.pendingNote.chapterIndex;
+    await addMark({
+      id: markId(),
+      type: 'note',
+      chapterIndex: index,
+      chapterTitle: chapterTitleAt(index),
+      ratio: currentRatio(),
+      quote: state.pendingNote.quote.slice(0, 500),
+      note: text,
+      createdAt: Date.now(),
+    });
+  }
+  hideModal('note-modal');
+  state.editingMark = null;
+  state.pendingNote = null;
+  renderMarks();
+  refreshNoteHighlights();
+  toast('笔记已保存');
+}
+
+function sortedMarks() {
+  return [...state.marks].sort((a, b) => a.chapterIndex - b.chapterIndex || a.ratio - b.ratio || a.createdAt - b.createdAt);
+}
+
+function renderMarks() {
+  const list = $('marks-list');
+  list.innerHTML = '';
+  const marks = sortedMarks();
+  if (!marks.length) {
+    list.appendChild(el('div', 'toc-hit muted', '还没有书签或笔记。阅读时点上面的按钮加书签，或选中一段文字写笔记。'));
+    return;
+  }
+  for (const mark of marks) {
+    const item = el('div', 'mark-item');
+    const where = el('div', 'where');
+    where.append(
+      el('span', 'kind', mark.type === 'note' ? '笔记' : '书签'),
+      el('span', null, `第 ${mark.chapterIndex + 1} 章 · ${mark.chapterTitle || chapterTitleAt(mark.chapterIndex)}`),
+    );
+    item.appendChild(where);
+    if (mark.quote) item.appendChild(el('div', 'quote', `「${mark.quote}」`));
+    if (mark.note) item.appendChild(el('div', 'note', mark.note));
+
+    const ops = el('div', 'ops');
+    const go = el('button', 'ghost-btn', '跳过去');
+    go.addEventListener('click', (e) => { e.stopPropagation(); jumpToMark(mark); });
+    const edit = el('button', 'ghost-btn', mark.note ? '编辑' : '加笔记');
+    edit.addEventListener('click', (e) => { e.stopPropagation(); openNoteModal(mark); });
+    const del = el('button', 'ghost-btn danger', '删除');
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteMark(mark.id); });
+    ops.append(go, edit, del);
+    item.appendChild(ops);
+    item.addEventListener('click', () => jumpToMark(mark));
+    list.appendChild(item);
+  }
+}
+
+function jumpToMark(mark) {
+  if (!state.book) return;
+  state.highlight = '';
+  renderReader(mark.chapterIndex, mark.ratio || 0);
+  closePanels();
+  toast(`已跳到第 ${mark.chapterIndex + 1} 章`);
+}
+
+/** 笔记引用过的句子在正文里做下划线高亮 */
+function noteSegmentsFor(index) {
+  const segments = [];
+  for (const mark of state.marks) {
+    if (mark.chapterIndex !== index || !mark.quote) continue;
+    if (mark.type !== 'note' && !mark.fromSelection) continue;   // 自动摘要的书签不做高亮
+    for (const part of mark.quote.split('\n')) {
+      const seg = part.trim();
+      if (seg.length >= 3) segments.push(seg);
+    }
+  }
+  return segments;
+}
+
+function refreshNoteHighlights() {
+  if (!state.book) return;
+  if (isScrollMode()) {
+    const flow = $('chapter-flow');
+    for (const section of flow.children) {
+      const index = Number(section.dataset.index);
+      const body = section.querySelector('.flow-body');
+      if (body) body.innerHTML = chapterInnerHtml(index);
+    }
+  } else {
+    $('chapter-body').innerHTML = chapterInnerHtml(state.chapterIndex);
+  }
+}
+
+function exportMarks() {
+  if (!state.book) return;
+  const marks = sortedMarks();
+  if (!marks.length) { toast('还没有书签或笔记'); return; }
+  const lines = [`# ${state.book.title} · 书签与笔记`, ''];
+  for (const mark of marks) {
+    lines.push(`## 第 ${mark.chapterIndex + 1} 章 ${mark.chapterTitle || ''}（${mark.type === 'note' ? '笔记' : '书签'}）`);
+    if (mark.quote) lines.push(`> ${mark.quote.replace(/\n/g, '\n> ')}`);
+    if (mark.note) lines.push('', mark.note);
+    lines.push('', `— ${new Date(mark.createdAt).toLocaleString('zh-CN')}`, '');
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${state.book.title}-书签笔记.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('已导出书签与笔记');
+}
+
+/* ---- 选中文字后的浮层 ---- */
+function hideSelPop() {
+  $('sel-pop').classList.add('hidden');
+  state.selection = null;
+}
+
+function onSelectionEnd() {
+  if (!state.book || $('view-reader').classList.contains('hidden')) return;
+  const sel = window.getSelection();
+  const text = sel ? sel.toString().trim() : '';
+  if (!text || text.length < 2) { hideSelPop(); return; }
+  const node = sel.anchorNode;
+  const holder = node && (node.nodeType === 1 ? node : node.parentElement);
+  if (!holder || !holder.closest('#view-reader')) { hideSelPop(); return; }
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  const pop = $('sel-pop');
+  pop.classList.remove('hidden');
+  const top = rect.top + window.scrollY - pop.offsetHeight - 10;
+  pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, rect.left + window.scrollX))}px`;
+  pop.style.top = `${Math.max(window.scrollY + 8, top)}px`;
+  state.selection = { text, chapterIndex: chapterIndexOfNode(node) };
+}
+
+/* =========================================================
  * 目录 / 搜索
  * =======================================================*/
 function renderToc() {
@@ -3366,6 +3885,17 @@ function bindEvents() {
     if (files.length) handleFiles(files);
   });
 
+  let shelfSearchTimer = null;
+  $('shelf-search').addEventListener('input', () => {
+    clearTimeout(shelfSearchTimer);
+    shelfSearchTimer = setTimeout(renderShelf, 150);
+  });
+  $('shelf-sort').addEventListener('change', (e) => {
+    state.settings.shelfSort = e.target.value;
+    saveSettings(state.settings);
+    renderShelf();
+  });
+
   $('btn-choose-folder').addEventListener('click', () => $('folder-input').click());
   $('folder-input').addEventListener('change', (e) => {
     handleFiles([...e.target.files], { batch: true });
@@ -3394,6 +3924,48 @@ function bindEvents() {
   $('btn-settings').addEventListener('click', () => openPanel('settings-panel'));
   $('overlay').addEventListener('click', closePanels);
   document.querySelectorAll('[data-close-panel]').forEach((b) => b.addEventListener('click', closePanels));
+
+  $('btn-marks').addEventListener('click', () => {
+    if (!state.book) { toast('请先打开一本书'); return; }
+    renderMarks();
+    openPanel('marks-panel');
+  });
+  $('btn-add-bookmark').addEventListener('click', () => addBookmark());
+  $('btn-export-marks').addEventListener('click', exportMarks);
+  $('sel-note').addEventListener('click', () => {
+    if (!state.selection) return;
+    const { text, chapterIndex } = state.selection;
+    hideSelPop();
+    openNoteModal(null, text, chapterIndex);
+  });
+  $('sel-mark').addEventListener('click', () => {
+    if (!state.selection) return;
+    const { text } = state.selection;
+    hideSelPop();
+    addBookmark(text);
+  });
+  $('note-save').addEventListener('click', saveNoteFromModal);
+  $('note-cancel').addEventListener('click', () => hideModal('note-modal'));
+  $('note-close').addEventListener('click', () => hideModal('note-modal'));
+  $('note-delete').addEventListener('click', async () => {
+    if (!state.editingMark) return;
+    await deleteMark(state.editingMark.id);
+    state.editingMark = null;
+    hideModal('note-modal');
+    toast('已删除');
+  });
+  $('note-text').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveNoteFromModal();
+  });
+  document.addEventListener('mouseup', (e) => {
+    if (e.target.closest && e.target.closest('#sel-pop')) return;
+    setTimeout(onSelectionEnd, 10);
+  });
+  document.addEventListener('selectionchange', () => {
+    const sel = window.getSelection();
+    if (!sel || !sel.toString().trim()) hideSelPop();
+  });
+  window.addEventListener('scroll', hideSelPop, { passive: true });
 
   $('btn-export').addEventListener('click', exportClean);
   $('btn-retypeset').addEventListener('click', () => {
@@ -3452,12 +4024,18 @@ function bindEvents() {
       if (e.key === 'Escape') e.target.blur();
       return;
     }
-    if (e.key === 'Escape') { closePanels(); hideModal('import-modal'); hideModal('paste-modal'); return; }
+    if (e.key === 'Escape') {
+      closePanels(); hideSelPop();
+      hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal');
+      return;
+    }
     if (!state.book) return;
     switch (e.key) {
       case 'ArrowLeft': goChapter(state.chapterIndex - 1, { closePanel: false }); break;
       case 'ArrowRight': goChapter(state.chapterIndex + 1, { closePanel: false }); break;
       case 't': case 'T': $('btn-toc').click(); break;
+      case 'b': case 'B': $('btn-marks').click(); break;
+      case 'd': case 'D': addBookmark(); break;
       case 's': case 'S': openPanel('settings-panel'); break;
       case 'g': case 'G':
         $('btn-toc').click();
@@ -3476,11 +4054,35 @@ function bindEvents() {
 /* =========================================================
  * 启动
  * =======================================================*/
+/* =========================================================
+ * PWA：离线可用 + 可安装
+ * =======================================================*/
+function setupPwa() {
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* 不支持就算了 */ });
+  }
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    state.installPrompt = e;
+    $('btn-install').hidden = false;
+  });
+  $('btn-install').addEventListener('click', async () => {
+    if (!state.installPrompt) return;
+    state.installPrompt.prompt();
+    const choice = await state.installPrompt.userChoice.catch(() => null);
+    state.installPrompt = null;
+    $('btn-install').hidden = true;
+    if (choice && choice.outcome === 'accepted') toast('已添加到桌面');
+  });
+  window.addEventListener('appinstalled', () => { $('btn-install').hidden = true; });
+}
+
 async function main() {
   applySettings();
   bindSettings();
   bindImportInputs();
   bindEvents();
+  setupPwa();
   await refreshShelf();
   // 自动打开上次在读的书
   const last = state.books.find((b) => b.lastReadAt);

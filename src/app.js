@@ -11,6 +11,7 @@ import {
 } from './chapters.js';
 import {
   listBooks, getContent, saveBook, updateBook, deleteBook, newId,
+  getMarks, saveMarks, markCounts,
   loadSettings, saveSettings, DEFAULT_SETTINGS,
 } from './store.js';
 
@@ -39,6 +40,9 @@ const state = {
   autoScrollTimer: null,
   pending: null,       // 导入 / 重新排版的临时数据
   flow: null,          // 无缝滚动模式下已加载的章节区间
+  marks: [],           // 当前书的书签与笔记
+  markCounts: new Map(),
+  editingMark: null,
   nativeChapters: null,// 电子书自带目录
   batchAbort: false,
 };
@@ -66,6 +70,7 @@ function applySettings() {
   ['fontSize', 'lineHeight', 'letterSpacing', 'paragraphSpacing', 'pageWidth', 'autoScrollSpeed']
     .forEach((k) => { $(`set-${k}`).value = s[k]; });
   $('set-fontFamily').value = s.fontFamily;
+  $('shelf-sort').value = s.shelfSort || 'recent';
   [...$('theme-row').children].forEach((b) => b.classList.toggle('active', b.dataset.themeValue === s.theme));
   [...$('mode-row').children].forEach((b) => b.classList.toggle('active', b.dataset.modeValue === (s.readingMode || 'scroll')));
   saveSettings(s);
@@ -129,64 +134,191 @@ function openPanel(id) {
 function closePanels() {
   $('toc-panel').classList.add('hidden');
   $('settings-panel').classList.add('hidden');
+  $('marks-panel').classList.add('hidden');
   $('overlay').classList.add('hidden');
 }
 function showModal(id) { $(id).classList.remove('hidden'); }
 function hideModal(id) { $(id).classList.add('hidden'); }
 
 /* =========================================================
- * 书架
+ * 书架：分类、搜索、排序
  * =======================================================*/
+const UNCATEGORIZED = '未分类';
+
+function bookCategory(book) {
+  return (book.category || '').trim() || UNCATEGORIZED;
+}
+
+function allCategories() {
+  const map = new Map();
+  for (const book of state.books) {
+    const cat = bookCategory(book);
+    map.set(cat, (map.get(cat) || 0) + 1);
+  }
+  return [...map.entries()]
+    .sort((a, b) => (a[0] === UNCATEGORIZED ? 1 : b[0] === UNCATEGORIZED ? -1 : b[1] - a[1] || a[0].localeCompare(b[0], 'zh')));
+}
+
+function bookPercent(book) {
+  if (!book.progress || !book.chapterCount || !book.lastReadAt) return 0;
+  return Math.min(100, Math.round(((book.progress.chapterIndex + 1) / book.chapterCount) * 100));
+}
+
+function sortBooks(books) {
+  const mode = state.settings.shelfSort || 'recent';
+  const copy = [...books];
+  if (mode === 'title') copy.sort((a, b) => a.title.localeCompare(b.title, 'zh'));
+  else if (mode === 'created') copy.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  else if (mode === 'progress') copy.sort((a, b) => bookPercent(b) - bookPercent(a));
+  else copy.sort((a, b) => (b.lastReadAt || b.createdAt || 0) - (a.lastReadAt || a.createdAt || 0));
+  return copy;
+}
+
 async function refreshShelf() {
   state.books = await listBooks();
+  try { state.markCounts = await markCounts(); } catch { state.markCounts = new Map(); }
+  renderShelf();
+  refreshCategoryOptions();
+}
+
+function refreshCategoryOptions() {
+  const list = $('category-options');
+  list.innerHTML = '';
+  for (const [name] of allCategories()) {
+    if (name === UNCATEGORIZED) continue;
+    const opt = document.createElement('option');
+    opt.value = name;
+    list.appendChild(opt);
+  }
+}
+
+function makeBookCard(book) {
+  const card = el('div', 'book-card');
+  card.dataset.id = book.id;
+  card.appendChild(el('h3', null, book.title));
+
+  const tags = el('div', 'tags');
+  tags.appendChild(el('span', 'tag', bookCategory(book)));
+  const kindLabel = { epub: 'EPUB', pdf: 'PDF', paste: '粘贴' }[book.kind];
+  if (kindLabel) tags.appendChild(el('span', 'tag', kindLabel));
+  const marks = (state.markCounts && state.markCounts.get(book.id)) || 0;
+  if (marks) tags.appendChild(el('span', 'tag mark', `${marks} 条笔记/书签`));
+  card.appendChild(tags);
+
+  const percent = bookPercent(book);
+  const meta = el('div', 'book-meta');
+  meta.innerHTML = `${fmtNum(book.chapterCount)} 章 · ${fmtNum(book.charCount)} 字 · 已读 ${percent}%<br>`
+    + `${book.lastReadAt ? `上次阅读：${new Date(book.lastReadAt).toLocaleString('zh-CN')}` : '尚未阅读'}`;
+  card.appendChild(meta);
+
+  const bar = el('div', 'book-progress');
+  const inner = el('i');
+  inner.style.width = `${percent}%`;
+  bar.appendChild(inner);
+  card.appendChild(bar);
+
+  const actions = el('div', 'book-actions');
+  const readBtn = el('button', 'primary-btn', book.progress && book.lastReadAt ? '继续阅读' : '开始阅读');
+  readBtn.addEventListener('click', (e) => { e.stopPropagation(); openBook(book.id); });
+  const catBtn = el('button', 'ghost-btn', '分类');
+  catBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const next = prompt(`把《${book.title}》放到哪个分类？`, bookCategory(book));
+    if (next == null) return;
+    book.category = next.trim() === UNCATEGORIZED ? '' : next.trim();
+    await updateBook(book);
+    await refreshShelf();
+    toast(`已移动到「${bookCategory(book)}」`);
+  });
+  const delBtn = el('button', 'ghost-btn danger', '删除');
+  delBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`确定要从书架删除《${book.title}》吗？`)) return;
+    await deleteBook(book.id);
+    if (state.book && state.book.id === book.id) showShelf();
+    else refreshShelf();
+    toast('已删除');
+  });
+  actions.append(readBtn, catBtn, delBtn);
+  card.appendChild(actions);
+  card.addEventListener('click', () => openBook(book.id));
+  return card;
+}
+
+function renderShelf() {
+  const query = ($('shelf-search').value || '').trim().toLowerCase();
+  const activeCat = state.settings.shelfCategory || '';
   const grid = $('book-grid');
   grid.innerHTML = '';
-  $('shelf-count').textContent = state.books.length ? `共 ${state.books.length} 本` : '';
+
+  // 分类筛选条
+  const bar = $('category-bar');
+  bar.innerHTML = '';
+  const cats = allCategories();
+  if (cats.length > 1) {
+    const all = el('button', `cat-chip${activeCat ? '' : ' active'}`);
+    all.innerHTML = `全部<span class="n">${state.books.length}</span>`;
+    all.addEventListener('click', () => {
+      state.settings.shelfCategory = '';
+      saveSettings(state.settings);
+      renderShelf();
+    });
+    bar.appendChild(all);
+    for (const [name, count] of cats) {
+      const chip = el('button', `cat-chip${activeCat === name ? ' active' : ''}`);
+      chip.innerHTML = `${escapeHtml(name)}<span class="n">${count}</span>`;
+      chip.addEventListener('click', () => {
+        state.settings.shelfCategory = activeCat === name ? '' : name;
+        saveSettings(state.settings);
+        renderShelf();
+      });
+      bar.appendChild(chip);
+    }
+  }
+
+  let books = state.books;
+  if (activeCat) books = books.filter((b) => bookCategory(b) === activeCat);
+  if (query) {
+    books = books.filter((b) => b.title.toLowerCase().includes(query)
+      || bookCategory(b).toLowerCase().includes(query));
+  }
+  books = sortBooks(books);
+
+  $('shelf-count').textContent = state.books.length
+    ? `共 ${state.books.length} 本${books.length !== state.books.length ? `，当前显示 ${books.length} 本` : ''}`
+    : '';
   $('shelf-empty').classList.toggle('hidden', state.books.length > 0);
 
-  for (const book of state.books) {
-    const card = el('div', 'book-card');
-    card.appendChild(el('h3', null, book.title));
-    const percent = book.progress && book.chapterCount
-      ? Math.min(100, Math.round(((book.progress.chapterIndex + 1) / book.chapterCount) * 100))
-      : 0;
-    const meta = el('div', 'book-meta');
-    meta.innerHTML = `${fmtNum(book.chapterCount)} 章 · ${fmtNum(book.charCount)} 字<br>`
-      + `编码 ${escapeHtml(book.encoding || '-')} · 已读 ${percent}%<br>`
-      + `${book.lastReadAt ? `上次阅读：${new Date(book.lastReadAt).toLocaleString('zh-CN')}` : '尚未阅读'}`;
-    card.appendChild(meta);
-    const bar = el('div', 'book-progress');
-    const inner = el('i');
-    inner.style.width = `${percent}%`;
-    bar.appendChild(inner);
-    card.appendChild(bar);
-
-    const actions = el('div', 'book-actions');
-    const readBtn = el('button', 'primary-btn', book.progress ? '继续阅读' : '开始阅读');
-    readBtn.addEventListener('click', (e) => { e.stopPropagation(); openBook(book.id); });
-    const delBtn = el('button', 'ghost-btn danger', '删除');
-    delBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!confirm(`确定要从书架删除《${book.title}》吗？`)) return;
-      await deleteBook(book.id);
-      if (state.book && state.book.id === book.id) showShelf();
-      refreshShelf();
-      toast('已删除');
-    });
-    actions.append(readBtn, delBtn);
-    card.appendChild(actions);
-    card.addEventListener('click', () => openBook(book.id));
-    grid.appendChild(card);
+  // 不筛选、不搜索且有多个分类时，按分类分组显示
+  const grouped = !activeCat && !query && cats.length > 1;
+  if (grouped) {
+    for (const [name] of cats) {
+      const inCat = sortBooks(state.books.filter((b) => bookCategory(b) === name));
+      if (!inCat.length) continue;
+      const title = el('h3', 'shelf-group-title', `${name}（${inCat.length}）`);
+      grid.appendChild(title);
+      title.style.gridColumn = '1 / -1';
+      for (const book of inCat) grid.appendChild(makeBookCard(book));
+    }
+  } else {
+    for (const book of books) grid.appendChild(makeBookCard(book));
+    if (!books.length && state.books.length) {
+      const tip = el('p', 'empty-tip', '没有匹配的书');
+      tip.style.gridColumn = '1 / -1';
+      grid.appendChild(tip);
+    }
   }
 }
 
 function showShelf() {
   stopAutoScroll();
   state.book = null;
+  state.marks = [];
   $('view-shelf').classList.remove('hidden');
   $('view-reader').classList.add('hidden');
   $('btn-retypeset').hidden = true;
   $('btn-export').hidden = true;
+  $('btn-marks').hidden = true;
   $('top-book').textContent = '清风阅读';
   $('top-chapter').textContent = '本地小说阅读器 · TXT / EPUB / PDF';
   $('progressbar').style.width = '0';
@@ -367,6 +499,7 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
   state.pending = {
     raw,
     name,
+    category: encodingInfo.category || '',
     encoding: encodingInfo.encoding,
     buffer: encodingInfo.buffer || null,
     bookId: existing ? existing.id : null,
@@ -380,6 +513,7 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
   $('import-title').textContent = existing ? '重新排版 / 重新分章' : '导入并排版';
   $('import-confirm').textContent = existing ? '保存并重新阅读' : '导入并开始阅读';
   $('import-name').value = name;
+  $('import-category').value = existing ? (existing.category || '') : (state.pending.category || '');
 
   const encSelect = $('import-encoding');
   encSelect.innerHTML = '';
@@ -469,6 +603,7 @@ async function confirmImport() {
     splitOptions: pending.splitOptions,
     chapterSource: pending.useNative ? 'native' : 'rules',
     kind: pending.kind || 'txt',
+    category: ($('import-category').value || '').trim(),
     progress: existing && existing.progress
       ? { chapterIndex: Math.min(existing.progress.chapterIndex, chapters.length - 1), ratio: 0 }
       : { chapterIndex: 0, ratio: 0 },
@@ -493,6 +628,15 @@ async function confirmImport() {
 }
 
 const SUPPORTED_EXT = /\.(txt|text|epub|pdf)$/i;
+
+/** 从文件的相对路径推断分类：用它所在的那层文件夹名 */
+function categoryFromPath(file) {
+  const path = file.webkitRelativePath || file.__relPath || '';
+  const parts = path.split('/').filter(Boolean);
+  parts.pop();                       // 去掉文件名
+  if (!parts.length) return '';
+  return parts[parts.length - 1];    // 直接所在的文件夹
+}
 
 /** 按扩展名解析成统一的「待导入」结构 */
 async function readBookFile(file) {
@@ -552,6 +696,7 @@ async function handleFiles(files, opts = {}) {
     try {
       const info = await readBookFile(list[0]);
       if (!info.raw || !info.raw.replace(/\s/g, '')) { toast(`${list[0].name} 里没有可读的文字`); return; }
+      info.category = categoryFromPath(list[0]);
       openImportModal(info.raw, info.name, info, null, info.native);
     } catch (err) {
       toast(`读取 ${list[0].name} 失败：${err.message}`);
@@ -608,6 +753,7 @@ async function batchImport(files) {
         title: info.name,
         encoding: info.encoding,
         kind: info.kind,
+        category: categoryFromPath(file),
         createdAt: Date.now(),
         lastReadAt: 0,
         charCount,
@@ -627,7 +773,8 @@ async function batchImport(files) {
       existing.push(meta);
       ok += 1;
       const repaired = split && split.repair && split.repair.inserted ? `，补回 ${split.repair.inserted} 章` : '';
-      listEl.appendChild(el('li', 'ok', `《${info.name}》${chapters.length} 章${repaired}`));
+      const cat = meta.category ? `［${meta.category}］` : '';
+      listEl.appendChild(el('li', 'ok', `${cat}《${info.name}》${chapters.length} 章${repaired}`));
     } catch (err) {
       failed += 1;
       listEl.appendChild(el('li', 'fail', `${file.name}：${err.message}`));
@@ -651,6 +798,8 @@ async function filesFromDataTransfer(dt) {
     if (!entry) return;
     if (entry.isFile) {
       const file = await new Promise((res, rej) => entry.file(res, rej));
+      // fullPath 形如 /玄幻/某书.txt，用来推断分类
+      try { file.__relPath = (entry.fullPath || '').replace(/^\//, ''); } catch { /* 只读时忽略 */ }
       out.push(file);
       return;
     }
@@ -697,7 +846,10 @@ async function openBook(id) {
   $('view-reader').classList.remove('hidden');
   $('btn-retypeset').hidden = false;
   $('btn-export').hidden = false;
+  $('btn-marks').hidden = false;
   $('top-book').textContent = meta.title;
+  await loadMarks();
+  renderMarks();
   renderToc();
   renderReader(state.chapterIndex, meta.progress ? meta.progress.ratio : 0);
 }
@@ -714,6 +866,7 @@ function isScrollMode() {
 /** 把一章正文转成段落 HTML */
 function chapterInnerHtml(index) {
   const text = state.chapterTexts[index] || '';
+  const noteSegments = state.highlight ? [] : noteSegmentsFor(index);
   const html = text.split('\n').map((line) => {
     const t = line.trim();
     if (!t) return '<p class="blank"></p>';
@@ -721,6 +874,11 @@ function chapterInnerHtml(index) {
     if (state.highlight) {
       const re = new RegExp(escapeRegExp(state.highlight), 'gi');
       safe = safe.replace(re, (m) => `<mark>${m}</mark>`);
+    } else {
+      for (const seg of noteSegments) {
+        const escaped = escapeHtml(seg);
+        if (safe.includes(escaped)) safe = safe.split(escaped).join(`<span class="note-hl">${escaped}</span>`);
+      }
     }
     return `<p>${safe}</p>`;
   }).join('');
@@ -939,6 +1097,230 @@ function saveProgress() {
 }
 
 /* =========================================================
+ * 书签与笔记
+ * =======================================================*/
+const markId = () => `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+
+async function loadMarks() {
+  state.marks = state.book ? await getMarks(state.book.id).catch(() => []) : [];
+}
+
+async function persistMarks() {
+  if (!state.book) return;
+  try {
+    await saveMarks(state.book.id, state.marks);
+    state.markCounts.set(state.book.id, state.marks.length);
+  } catch { /* 写入失败时至少界面还是对的 */ }
+}
+
+/** 当前屏幕上第一段文字，作为书签的摘要 */
+function firstVisibleText() {
+  const paragraphs = document.querySelectorAll('#view-reader p');
+  for (const p of paragraphs) {
+    const rect = p.getBoundingClientRect();
+    if (rect.bottom > 150 && rect.top < window.innerHeight && p.textContent.trim()) {
+      return p.textContent.trim().slice(0, 60);
+    }
+  }
+  return '';
+}
+
+function chapterIndexOfNode(node) {
+  const elNode = node && (node.nodeType === 1 ? node : node.parentElement);
+  const section = elNode && elNode.closest ? elNode.closest('.flow-chapter') : null;
+  return section ? Number(section.dataset.index) : state.chapterIndex;
+}
+
+async function addMark(mark) {
+  state.marks.push(mark);
+  await persistMarks();
+  renderMarks();
+  if (mark.chapterIndex === state.chapterIndex || isScrollMode()) refreshNoteHighlights();
+}
+
+async function addBookmark(quote) {
+  if (!state.book) return;
+  const index = state.chapterIndex;
+  await addMark({
+    id: markId(),
+    type: 'bookmark',
+    fromSelection: !!quote,
+    chapterIndex: index,
+    chapterTitle: chapterTitleAt(index),
+    ratio: currentRatio(),
+    quote: (quote || firstVisibleText()).slice(0, 200),
+    note: '',
+    createdAt: Date.now(),
+  });
+  toast(`已在「${chapterTitleAt(index)}」加书签`);
+}
+
+async function deleteMark(id) {
+  state.marks = state.marks.filter((m) => m.id !== id);
+  await persistMarks();
+  renderMarks();
+  refreshNoteHighlights();
+}
+
+function openNoteModal(mark, quote, chapterIndex) {
+  state.editingMark = mark || null;
+  state.pendingNote = mark ? null : { quote, chapterIndex };
+  $('note-title').textContent = mark ? '编辑笔记' : '写笔记';
+  $('note-quote').textContent = mark ? mark.quote : quote;
+  $('note-quote').classList.toggle('hidden', !(mark ? mark.quote : quote));
+  $('note-text').value = mark ? mark.note : '';
+  $('note-delete').classList.toggle('hidden', !mark);
+  showModal('note-modal');
+  setTimeout(() => $('note-text').focus(), 50);
+}
+
+async function saveNoteFromModal() {
+  const text = $('note-text').value.trim();
+  if (state.editingMark) {
+    state.editingMark.note = text;
+    state.editingMark.type = 'note';
+    await persistMarks();
+  } else if (state.pendingNote) {
+    const index = state.pendingNote.chapterIndex;
+    await addMark({
+      id: markId(),
+      type: 'note',
+      chapterIndex: index,
+      chapterTitle: chapterTitleAt(index),
+      ratio: currentRatio(),
+      quote: state.pendingNote.quote.slice(0, 500),
+      note: text,
+      createdAt: Date.now(),
+    });
+  }
+  hideModal('note-modal');
+  state.editingMark = null;
+  state.pendingNote = null;
+  renderMarks();
+  refreshNoteHighlights();
+  toast('笔记已保存');
+}
+
+function sortedMarks() {
+  return [...state.marks].sort((a, b) => a.chapterIndex - b.chapterIndex || a.ratio - b.ratio || a.createdAt - b.createdAt);
+}
+
+function renderMarks() {
+  const list = $('marks-list');
+  list.innerHTML = '';
+  const marks = sortedMarks();
+  if (!marks.length) {
+    list.appendChild(el('div', 'toc-hit muted', '还没有书签或笔记。阅读时点上面的按钮加书签，或选中一段文字写笔记。'));
+    return;
+  }
+  for (const mark of marks) {
+    const item = el('div', 'mark-item');
+    const where = el('div', 'where');
+    where.append(
+      el('span', 'kind', mark.type === 'note' ? '笔记' : '书签'),
+      el('span', null, `第 ${mark.chapterIndex + 1} 章 · ${mark.chapterTitle || chapterTitleAt(mark.chapterIndex)}`),
+    );
+    item.appendChild(where);
+    if (mark.quote) item.appendChild(el('div', 'quote', `「${mark.quote}」`));
+    if (mark.note) item.appendChild(el('div', 'note', mark.note));
+
+    const ops = el('div', 'ops');
+    const go = el('button', 'ghost-btn', '跳过去');
+    go.addEventListener('click', (e) => { e.stopPropagation(); jumpToMark(mark); });
+    const edit = el('button', 'ghost-btn', mark.note ? '编辑' : '加笔记');
+    edit.addEventListener('click', (e) => { e.stopPropagation(); openNoteModal(mark); });
+    const del = el('button', 'ghost-btn danger', '删除');
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteMark(mark.id); });
+    ops.append(go, edit, del);
+    item.appendChild(ops);
+    item.addEventListener('click', () => jumpToMark(mark));
+    list.appendChild(item);
+  }
+}
+
+function jumpToMark(mark) {
+  if (!state.book) return;
+  state.highlight = '';
+  renderReader(mark.chapterIndex, mark.ratio || 0);
+  closePanels();
+  toast(`已跳到第 ${mark.chapterIndex + 1} 章`);
+}
+
+/** 笔记引用过的句子在正文里做下划线高亮 */
+function noteSegmentsFor(index) {
+  const segments = [];
+  for (const mark of state.marks) {
+    if (mark.chapterIndex !== index || !mark.quote) continue;
+    if (mark.type !== 'note' && !mark.fromSelection) continue;   // 自动摘要的书签不做高亮
+    for (const part of mark.quote.split('\n')) {
+      const seg = part.trim();
+      if (seg.length >= 3) segments.push(seg);
+    }
+  }
+  return segments;
+}
+
+function refreshNoteHighlights() {
+  if (!state.book) return;
+  if (isScrollMode()) {
+    const flow = $('chapter-flow');
+    for (const section of flow.children) {
+      const index = Number(section.dataset.index);
+      const body = section.querySelector('.flow-body');
+      if (body) body.innerHTML = chapterInnerHtml(index);
+    }
+  } else {
+    $('chapter-body').innerHTML = chapterInnerHtml(state.chapterIndex);
+  }
+}
+
+function exportMarks() {
+  if (!state.book) return;
+  const marks = sortedMarks();
+  if (!marks.length) { toast('还没有书签或笔记'); return; }
+  const lines = [`# ${state.book.title} · 书签与笔记`, ''];
+  for (const mark of marks) {
+    lines.push(`## 第 ${mark.chapterIndex + 1} 章 ${mark.chapterTitle || ''}（${mark.type === 'note' ? '笔记' : '书签'}）`);
+    if (mark.quote) lines.push(`> ${mark.quote.replace(/\n/g, '\n> ')}`);
+    if (mark.note) lines.push('', mark.note);
+    lines.push('', `— ${new Date(mark.createdAt).toLocaleString('zh-CN')}`, '');
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${state.book.title}-书签笔记.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('已导出书签与笔记');
+}
+
+/* ---- 选中文字后的浮层 ---- */
+function hideSelPop() {
+  $('sel-pop').classList.add('hidden');
+  state.selection = null;
+}
+
+function onSelectionEnd() {
+  if (!state.book || $('view-reader').classList.contains('hidden')) return;
+  const sel = window.getSelection();
+  const text = sel ? sel.toString().trim() : '';
+  if (!text || text.length < 2) { hideSelPop(); return; }
+  const node = sel.anchorNode;
+  const holder = node && (node.nodeType === 1 ? node : node.parentElement);
+  if (!holder || !holder.closest('#view-reader')) { hideSelPop(); return; }
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  const pop = $('sel-pop');
+  pop.classList.remove('hidden');
+  const top = rect.top + window.scrollY - pop.offsetHeight - 10;
+  pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, rect.left + window.scrollX))}px`;
+  pop.style.top = `${Math.max(window.scrollY + 8, top)}px`;
+  state.selection = { text, chapterIndex: chapterIndexOfNode(node) };
+}
+
+/* =========================================================
  * 目录 / 搜索
  * =======================================================*/
 function renderToc() {
@@ -1094,6 +1476,17 @@ function bindEvents() {
     if (files.length) handleFiles(files);
   });
 
+  let shelfSearchTimer = null;
+  $('shelf-search').addEventListener('input', () => {
+    clearTimeout(shelfSearchTimer);
+    shelfSearchTimer = setTimeout(renderShelf, 150);
+  });
+  $('shelf-sort').addEventListener('change', (e) => {
+    state.settings.shelfSort = e.target.value;
+    saveSettings(state.settings);
+    renderShelf();
+  });
+
   $('btn-choose-folder').addEventListener('click', () => $('folder-input').click());
   $('folder-input').addEventListener('change', (e) => {
     handleFiles([...e.target.files], { batch: true });
@@ -1122,6 +1515,48 @@ function bindEvents() {
   $('btn-settings').addEventListener('click', () => openPanel('settings-panel'));
   $('overlay').addEventListener('click', closePanels);
   document.querySelectorAll('[data-close-panel]').forEach((b) => b.addEventListener('click', closePanels));
+
+  $('btn-marks').addEventListener('click', () => {
+    if (!state.book) { toast('请先打开一本书'); return; }
+    renderMarks();
+    openPanel('marks-panel');
+  });
+  $('btn-add-bookmark').addEventListener('click', () => addBookmark());
+  $('btn-export-marks').addEventListener('click', exportMarks);
+  $('sel-note').addEventListener('click', () => {
+    if (!state.selection) return;
+    const { text, chapterIndex } = state.selection;
+    hideSelPop();
+    openNoteModal(null, text, chapterIndex);
+  });
+  $('sel-mark').addEventListener('click', () => {
+    if (!state.selection) return;
+    const { text } = state.selection;
+    hideSelPop();
+    addBookmark(text);
+  });
+  $('note-save').addEventListener('click', saveNoteFromModal);
+  $('note-cancel').addEventListener('click', () => hideModal('note-modal'));
+  $('note-close').addEventListener('click', () => hideModal('note-modal'));
+  $('note-delete').addEventListener('click', async () => {
+    if (!state.editingMark) return;
+    await deleteMark(state.editingMark.id);
+    state.editingMark = null;
+    hideModal('note-modal');
+    toast('已删除');
+  });
+  $('note-text').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveNoteFromModal();
+  });
+  document.addEventListener('mouseup', (e) => {
+    if (e.target.closest && e.target.closest('#sel-pop')) return;
+    setTimeout(onSelectionEnd, 10);
+  });
+  document.addEventListener('selectionchange', () => {
+    const sel = window.getSelection();
+    if (!sel || !sel.toString().trim()) hideSelPop();
+  });
+  window.addEventListener('scroll', hideSelPop, { passive: true });
 
   $('btn-export').addEventListener('click', exportClean);
   $('btn-retypeset').addEventListener('click', () => {
@@ -1180,12 +1615,18 @@ function bindEvents() {
       if (e.key === 'Escape') e.target.blur();
       return;
     }
-    if (e.key === 'Escape') { closePanels(); hideModal('import-modal'); hideModal('paste-modal'); return; }
+    if (e.key === 'Escape') {
+      closePanels(); hideSelPop();
+      hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal');
+      return;
+    }
     if (!state.book) return;
     switch (e.key) {
       case 'ArrowLeft': goChapter(state.chapterIndex - 1, { closePanel: false }); break;
       case 'ArrowRight': goChapter(state.chapterIndex + 1, { closePanel: false }); break;
       case 't': case 'T': $('btn-toc').click(); break;
+      case 'b': case 'B': $('btn-marks').click(); break;
+      case 'd': case 'D': addBookmark(); break;
       case 's': case 'S': openPanel('settings-panel'); break;
       case 'g': case 'G':
         $('btn-toc').click();
@@ -1204,11 +1645,35 @@ function bindEvents() {
 /* =========================================================
  * 启动
  * =======================================================*/
+/* =========================================================
+ * PWA：离线可用 + 可安装
+ * =======================================================*/
+function setupPwa() {
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* 不支持就算了 */ });
+  }
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    state.installPrompt = e;
+    $('btn-install').hidden = false;
+  });
+  $('btn-install').addEventListener('click', async () => {
+    if (!state.installPrompt) return;
+    state.installPrompt.prompt();
+    const choice = await state.installPrompt.userChoice.catch(() => null);
+    state.installPrompt = null;
+    $('btn-install').hidden = true;
+    if (choice && choice.outcome === 'accepted') toast('已添加到桌面');
+  });
+  window.addEventListener('appinstalled', () => { $('btn-install').hidden = true; });
+}
+
 async function main() {
   applySettings();
   bindSettings();
   bindImportInputs();
   bindEvents();
+  setupPwa();
   await refreshShelf();
   // 自动打开上次在读的书
   const last = state.books.find((b) => b.lastReadAt);

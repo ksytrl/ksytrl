@@ -6,6 +6,9 @@
 <title>清风阅读 · 本地小说阅读器</title>
 <meta name="description" content="纯本地的小说阅读器：支持 TXT / EPUB / PDF，自动清理乱码与推广网址、智能排版、多规则分章与补章、无缝滚动阅读、任意跳章。">
 <link rel="stylesheet" href="assets/style.css">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#9a6a3a">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
 </head>
 <body>
 <div class="app">
@@ -18,7 +21,9 @@
     <div class="topbar-actions">
       <button class="ghost-btn" id="btn-shelf" title="书架">书架</button>
       <button class="ghost-btn" id="btn-retypeset" title="重新排版 / 重新分章" hidden>重新排版</button>
+      <button class="ghost-btn" id="btn-marks" title="书签与笔记 (B)" hidden>书签</button>
       <button class="ghost-btn" id="btn-export" title="导出清洗后的 TXT" hidden>导出</button>
+      <button class="ghost-btn" id="btn-install" title="安装到桌面 / 主屏幕" hidden>安装</button>
       <button class="icon-btn" id="btn-settings" title="阅读设置 (S)" aria-label="阅读设置">Aa</button>
     </div>
   </header>
@@ -55,6 +60,16 @@
         <h2>我的书架</h2>
         <span class="muted" id="shelf-count"></span>
       </div>
+      <div class="shelf-tools">
+        <input type="search" id="shelf-search" placeholder="搜索书名 / 分类">
+        <select id="shelf-sort">
+          <option value="recent">最近阅读</option>
+          <option value="created">最近导入</option>
+          <option value="title">按书名</option>
+          <option value="progress">按阅读进度</option>
+        </select>
+      </div>
+      <div class="category-bar" id="category-bar"></div>
       <div class="book-grid" id="book-grid"></div>
       <p class="empty-tip" id="shelf-empty">书架还是空的，先导入一本书吧（TXT / EPUB / PDF，或一整个文件夹）。</p>
 
@@ -67,6 +82,9 @@
         <div><h3>📚 多格式导入</h3><p>TXT、EPUB（读自带目录）、PDF（提取文字）均可导入，还能一键把整个文件夹的书入库。</p></div>
         <div><h3>⚡ 任意跳章</h3><p>目录点击、章节号直达、上一章/下一章、全文搜索定位，快捷键左右方向键翻章。</p></div>
         <div><h3>🌊 无缝滚动</h3><p>上下滚动自动接上下一章 / 上一章，也可切换成一章一页；进度与位置自动记忆。</p></div>
+        <div><h3>🔖 书签与笔记</h3><p>任意位置加书签，选中正文写笔记并自动高亮，可按章节浏览、跳转与导出。</p></div>
+        <div><h3>🗂️ 书架分组</h3><p>按分类分组与搜索；导入文件夹时自动按子目录名建立分类。</p></div>
+        <div><h3>📲 可安装 (PWA)</h3><p>可装到桌面或手机主屏，断网也能打开继续读。</p></div>
         <div><h3>🌙 阅读体验</h3><p>四套主题、字号行距页宽字体自定义、自动滚动、导出排版后的干净 TXT。</p></div>
       </section>
     </section>
@@ -169,6 +187,7 @@
       <ul>
         <li><kbd>←</kbd> / <kbd>→</kbd> 上一章 / 下一章</li>
         <li><kbd>T</kbd> 目录　<kbd>S</kbd> 设置　<kbd>G</kbd> 跳章</li>
+        <li><kbd>B</kbd> 书签与笔记　<kbd>D</kbd> 在当前位置加书签</li>
         <li>无缝滚动模式下，上下滚动会自动接上相邻章节</li>
         <li><kbd>+</kbd> / <kbd>-</kbd> 字号　<kbd>Esc</kbd> 关闭面板</li>
       </ul>
@@ -176,7 +195,48 @@
   </div>
 </aside>
 
+<!-- ============ 书签 / 笔记 ============ -->
+<aside class="panel panel-right hidden" id="marks-panel" aria-label="书签与笔记">
+  <div class="panel-head">
+    <strong>书签与笔记</strong>
+    <button class="icon-btn" data-close-panel="marks-panel" aria-label="关闭">✕</button>
+  </div>
+  <div class="panel-tools">
+    <div class="row">
+      <button class="primary-btn" id="btn-add-bookmark">在当前位置加书签</button>
+      <button class="ghost-btn" id="btn-export-marks">导出</button>
+    </div>
+    <div class="muted small">在正文里选中一段文字，就能把它存成笔记。</div>
+  </div>
+  <div class="toc-list" id="marks-list"></div>
+</aside>
+
 <div class="overlay hidden" id="overlay"></div>
+
+<!-- 选中文字后的浮层 -->
+<div class="sel-pop hidden" id="sel-pop">
+  <button class="ghost-btn" id="sel-note">写笔记</button>
+  <button class="ghost-btn" id="sel-mark">存为书签</button>
+</div>
+
+<!-- 笔记编辑弹窗 -->
+<div class="modal hidden" id="note-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong id="note-title">写笔记</strong>
+      <button class="icon-btn" id="note-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <blockquote class="note-quote" id="note-quote"></blockquote>
+      <div class="field"><label for="note-text">笔记内容</label>
+        <textarea id="note-text" rows="6" placeholder="写点什么……"></textarea></div>
+    </div>
+    <div class="modal-foot">
+      <button class="ghost-btn danger hidden" id="note-delete">删除</button>
+      <div class="grow"></div>
+      <button class="ghost-btn" id="note-cancel">取消</button>
+      <button class="primary-btn" id="note-save">保存</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============ 导入 / 重新排版 弹窗 ============ -->
 <div class="modal hidden" id="import-modal" role="dialog" aria-modal="true">
@@ -191,6 +251,10 @@
           <h4>基本信息</h4>
           <div class="field"><label for="import-name">书名</label>
             <input type="text" id="import-name"></div>
+          <div class="field"><label for="import-category">分类（书架分组）</label>
+            <input type="text" id="import-category" list="category-options" placeholder="未分类">
+            <datalist id="category-options"></datalist>
+          </div>
           <div class="field"><label for="import-encoding">文本编码</label>
             <select id="import-encoding"></select>
             <div class="muted small" id="import-encoding-hint"></div>

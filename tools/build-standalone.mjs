@@ -31,6 +31,8 @@ const script = MODULES
   .join('\n\n');
 
 const html = read('index.html')
+  .replace('<link rel="manifest" href="manifest.webmanifest">', '')
+  .replace('<link rel="apple-touch-icon" href="assets/icon-192.png">', '')
   // 用函数式 replacement，避免代码里的 $& / $1 被当成替换模式
   .replace('<link rel="stylesheet" href="assets/style.css">', () => `<style>\n${read('assets/style.css')}\n</style>`)
   .replace(

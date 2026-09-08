@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="清风阅读">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b98551"/><stop offset="1" stop-color="#8a5c2e"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M112 136c48-18 96-18 144 6v244c-48-24-96-24-144-6z" fill="#fffdf8" opacity=".96"/>
+  <path d="M400 136c-48-18-96-18-144 6v244c48-24 96-24 144-6z" fill="#f0e7d8" opacity=".96"/>
+  <path d="M256 142v244" stroke="#8a5c2e" stroke-width="10" stroke-linecap="round" opacity=".5"/>
+  <g stroke="#8a5c2e" stroke-width="9" stroke-linecap="round" opacity=".38">
+    <path d="M150 198h74M150 240h74M150 282h60M288 198h74M288 240h74M288 282h60"/>
+  </g>
+</svg>

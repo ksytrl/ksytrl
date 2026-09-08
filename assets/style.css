@@ -265,3 +265,49 @@ kbd {
 .batch-list li.ok { color: var(--text); }
 .batch-list li.fail { color: var(--danger); }
 #batch-modal .book-progress { height: 6px; }
+
+/* ===== 书架工具条与分类 ===== */
+.shelf-tools { display: flex; gap: 10px; margin: 0 0 12px; }
+.shelf-tools input[type="search"] { flex: 1; }
+.shelf-tools select { width: 150px; }
+.category-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.cat-chip {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  border-radius: 999px; padding: 5px 12px; font-size: 13px; cursor: pointer;
+}
+.cat-chip:hover { border-color: var(--accent); color: var(--accent); }
+.cat-chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.cat-chip .n { opacity: .7; margin-left: 4px; font-size: 12px; }
+.book-card .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.book-card .tag {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border);
+}
+.book-card .tag.mark { color: var(--accent); border-color: var(--accent); }
+.shelf-group-title { margin: 22px 0 10px; font-size: 14px; color: var(--text-dim); }
+
+/* ===== 书签与笔记 ===== */
+.mark-item { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.mark-item:hover { background: var(--accent-soft); }
+.mark-item .where { color: var(--accent); font-size: 12px; margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
+.mark-item .where .kind {
+  font-size: 11px; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; color: var(--text-dim);
+}
+.mark-item .quote { font-size: 13px; line-height: 1.7; color: var(--text); }
+.mark-item .note { font-size: 13px; line-height: 1.7; color: var(--text-dim); margin-top: 6px; white-space: pre-wrap; }
+.mark-item .ops { display: flex; gap: 8px; margin-top: 8px; }
+.mark-item .ops button { font-size: 12px; padding: 3px 8px; }
+.note-quote {
+  margin: 0 0 14px; padding: 10px 12px; border-left: 3px solid var(--accent);
+  background: var(--surface-2); border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.8; color: var(--text-dim);
+  max-height: 160px; overflow: auto;
+}
+.sel-pop {
+  position: absolute; z-index: 70; display: flex; gap: 6px; padding: 6px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+}
+.sel-pop button { font-size: 13px; padding: 5px 10px; }
+.chapter-body .note-hl, .flow-body .note-hl {
+  background: linear-gradient(transparent 62%, var(--accent-soft) 62%);
+  border-bottom: 1px dashed var(--accent);
+}
