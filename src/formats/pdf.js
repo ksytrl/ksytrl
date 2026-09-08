@@ -291,6 +291,35 @@ export function extractTextFromContent(content, fonts) {
   return lines;
 }
 
+
+/** 去掉每页的页码与重复出现的页眉页脚，避免它们被当成章节标题或章节号 */
+export function stripRunningHeads(pages) {
+  const lineSets = pages.map((page) => page.split('\n'));
+  // 页眉页脚在提取顺序里未必正好是首尾行，取每页前两行和后两行作为候选
+  const edgeIndexes = (lines) => new Set([0, 1, lines.length - 2, lines.length - 1].filter((i) => i >= 0 && i < lines.length));
+  const counts = new Map();
+  for (const lines of lineSets) {
+    for (const idx of edgeIndexes(lines)) {
+      const line = (lines[idx] || '').trim();
+      if (line && line.length <= 40) counts.set(line, (counts.get(line) || 0) + 1);
+    }
+  }
+  const threshold = Math.max(3, Math.ceil(pages.length * 0.5));
+  const isPageNumber = (line) => (
+    /^[-—–~\s]*(?:第\s*)?[0-9０-９]{1,5}(?:\s*[/／]\s*[0-9]{1,5})?(?:\s*页|\s*頁)?[-—–~\s]*$/.test(line)
+    || /^[-—–~\s]*[ivxlcdmIVXLCDM]{1,6}[-—–~\s]*$/.test(line)
+  );
+  return lineSets.map((lines) => {
+    const out = [...lines];
+    for (const idx of edgeIndexes(out)) {
+      const line = (out[idx] || '').trim();
+      if (!line) continue;
+      if (isPageNumber(line) || (counts.get(line) || 0) >= threshold) out[idx] = '';
+    }
+    return out.join('\n').trim();
+  });
+}
+
 /* ---------------- 主入口 ---------------- */
 
 async function decodeStream(bytes, raw, body, bodyStart, length) {
@@ -426,7 +455,8 @@ export async function parsePdf(buffer) {
     pages.push(extractTextFromContent(content, fonts).join('\n'));
   }
 
-  const text = pages.filter(Boolean).join('\n\n');
+  const cleanedPages = stripRunningHeads(pages);
+  const text = cleanedPages.filter(Boolean).join('\n\n');
   const infoNum = [...bodies.keys()].find((n) => /\/Title\s*\(/.test(bodies.get(n)));
   let title = '';
   if (infoNum != null) {
@@ -436,5 +466,5 @@ export async function parsePdf(buffer) {
   if (!text.replace(/\s/g, '')) {
     throw new Error('这个 PDF 里没有可提取的文字（可能是扫描图片版，需要 OCR）');
   }
-  return { title, pages, text };
+  return { title, pages: cleanedPages, text };
 }

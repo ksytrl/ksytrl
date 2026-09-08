@@ -749,12 +749,25 @@ function renderReader(index, restoreRatio = 0) {
   saveProgress();
 }
 
+/** 同步"跳转到第几章"输入框：用户正在输入时不要覆盖他填的值 */
+function syncJumpInput(node, value) {
+  if (!node) return;
+  if (document.activeElement === node) return;
+  if (node.dataset.dirty === '1') return;
+  node.value = value;
+}
+
+function clearJumpDirty() {
+  $('jump-input').dataset.dirty = '';
+  $('toc-jump').dataset.dirty = '';
+}
+
 function updateChapterChrome() {
   const total = state.chapterTexts.length;
   const i = state.chapterIndex;
   $('top-chapter').textContent = `第 ${i + 1} / ${total} 章 · ${chapterTitleAt(i)}`;
-  $('jump-input').value = i + 1;
-  $('toc-jump').value = i + 1;
+  syncJumpInput($('jump-input'), i + 1);
+  syncJumpInput($('toc-jump'), i + 1);
   $('btn-prev').disabled = i === 0;
   $('btn-next').disabled = i === total - 1;
   highlightTocItem(i);
@@ -1127,8 +1140,13 @@ function bindEvents() {
   const jump = (value) => {
     const n = Number(value);
     if (!n || n < 1 || n > state.chapterTexts.length) { toast(`请输入 1 - ${state.chapterTexts.length} 之间的章节号`); return; }
+    clearJumpDirty();
     goChapter(n - 1);
   };
+  // 输入过章节号之后，滚动带来的"当前章"更新不能再覆盖输入框
+  ['jump-input', 'toc-jump'].forEach((id) => {
+    $(id).addEventListener('input', (e) => { e.target.dataset.dirty = '1'; });
+  });
   $('btn-jump').addEventListener('click', () => jump($('jump-input').value));
   $('jump-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') jump(e.target.value); });
   $('toc-jump-btn').addEventListener('click', () => jump($('toc-jump').value));

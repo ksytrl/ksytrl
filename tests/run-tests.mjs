@@ -9,7 +9,7 @@ import {
 } from '../src/chapters.js';
 import { decodeBuffer, scoreText } from '../src/encoding.js';
 import { parseEpub, htmlToText } from '../src/formats/epub.js';
-import { parsePdf } from '../src/formats/pdf.js';
+import { parsePdf, stripRunningHeads } from '../src/formats/pdf.js';
 
 const readBuffer = async (path) => {
   const buf = await readFile(new URL(path, import.meta.url));
@@ -206,6 +206,14 @@ group('PDF 解析');
   check('中文正文提取正确', pdf.text.includes('夜色沉沉，他在林间遇见了那个人'), JSON.stringify(pdf.text.slice(0, 60)));
   const chapters = splitChapters(cleanText(pdf.text, {}, { ruleIds: ['cn-chapter'] }).text, { ruleIds: ['cn-chapter'] });
   check('PDF 文本可以正常分章', chapters.chapters.length === 3, JSON.stringify(chapters.chapters.map((c) => c.title)));
+
+  // 带页眉页脚的 PDF：书名页眉和页码都不该混进正文（页码会被误当成章节号）
+  const withHeads = await parsePdf(await readBuffer('../samples/sample-with-headers.pdf'));
+  check('去掉重复页眉', !withHeads.text.includes('精校版'), JSON.stringify(withHeads.text.slice(0, 60)));
+  check('去掉孤立页码行', !withHeads.text.split('\n').some((l) => /^\s*\d{1,3}\s*$/.test(l)), '');
+  check('正文没被误删', withHeads.text.includes('用来验证提取效果'), '');
+  const heads = stripRunningHeads(['书名\n正文甲\n1', '书名\n正文乙\n2', '书名\n正文丙\n3', '书名\n正文丁\n4']);
+  check('stripRunningHeads 直接调用', heads.join('|') === '正文甲|正文乙|正文丙|正文丁', JSON.stringify(heads));
 }
 
 console.log(results.join('\n'));
