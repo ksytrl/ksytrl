@@ -10,6 +10,9 @@ import {
 import { decodeBuffer, scoreText } from '../src/encoding.js';
 import { parseEpub, htmlToText } from '../src/formats/epub.js';
 import { parsePdf, stripRunningHeads } from '../src/formats/pdf.js';
+import {
+  readDocx, readFb2, readHtml, readMarkdown, readRtf, readMobi, groupOf, FORMAT_GROUPS,
+} from '../src/formats/readers.js';
 
 const readBuffer = async (path) => {
   const buf = await readFile(new URL(path, import.meta.url));
@@ -228,6 +231,33 @@ group('PDF 解析');
 
   const heads = stripRunningHeads(['书名\n正文甲\n1', '书名\n正文乙\n2', '书名\n正文丙\n3', '书名\n正文丁\n4']);
   check('stripRunningHeads 直接调用', heads.join('|') === '正文甲|正文乙|正文丙|正文丁', JSON.stringify(heads));
+}
+
+/* ---------- 其它格式 ---------- */
+group('更多格式（MOBI / DOCX / HTML / Markdown / FB2 / RTF）');
+{
+  const docx = await readDocx(await readBuffer('../samples/sample.docx'));
+  check('DOCX 提取正文', docx.text.includes('第一章 初遇') && docx.text.includes('多年以后'), JSON.stringify(docx.text.slice(0, 30)));
+
+  const fb2 = readFb2(await readBuffer('../samples/sample.fb2'));
+  check('FB2（GBK 编码）提取正文与书名', fb2.title === '夜行记' && fb2.text.includes('刀光一闪'), JSON.stringify({ t: fb2.title, s: fb2.text.slice(0, 20) }));
+
+  const html = readHtml(await readBuffer('../samples/sample.html'));
+  check('HTML 提取正文与标题', html.title === '夜行记' && html.text.includes('第二章 刀光'), JSON.stringify(html.title));
+
+  const md = readMarkdown(await readBuffer('../samples/sample.md'));
+  check('Markdown 去掉标记保留正文', !md.text.includes('##') && md.text.includes('第三章 归途'), JSON.stringify(md.text.slice(0, 30)));
+
+  const rtf = readRtf(await readBuffer('../samples/sample.rtf'));
+  check('RTF（GBK 码页）还原中文', rtf.text.includes('夜色沉沉') && rtf.text.includes('第三章 归途'), JSON.stringify(rtf.text.slice(0, 30)));
+
+  const mobi = readMobi(await readBuffer('../samples/sample.mobi'));
+  check('MOBI 提取正文', mobi.text.includes('第一章 初遇') && mobi.text.includes('血溅在雪地上'), JSON.stringify(mobi.text.slice(0, 30)));
+
+  check('分栏只认自己的扩展名',
+    groupOf('a.pdf').id === 'pdf' && groupOf('a.epub').id === 'epub'
+    && groupOf('a.txt').id === 'txt' && groupOf('a.mobi').id === 'other' && groupOf('a.zip') === null,
+    JSON.stringify(FORMAT_GROUPS.map((g) => g.id)));
 }
 
 console.log(results.join('\n'));

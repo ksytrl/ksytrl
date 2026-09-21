@@ -1,5 +1,5 @@
 /* 清风阅读 Service Worker：应用外壳离线可用；书籍本身存在 IndexedDB，本来就是离线的 */
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `qingfeng-reader-${VERSION}`;
 const SHELL = [
   './',
@@ -15,8 +15,13 @@ const SHELL = [
   './src/chapters.js',
   './src/encoding.js',
   './src/formats/zip.js',
+  './src/formats/vendor.js',
   './src/formats/epub.js',
   './src/formats/pdf.js',
+  './src/formats/readers.js',
+  './vendor/jszip/jszip.min.js',
+  './vendor/pdfjs/pdf.min.js',
+  './vendor/pdfjs/pdf.worker.min.js',
 ];
 
 self.addEventListener('install', (event) => {

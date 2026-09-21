@@ -4,6 +4,7 @@
  * 用正则做轻量解析，浏览器和 Node 里都能跑，不依赖 DOMParser。
  */
 import { readZip, readZipText } from './zip.js';
+import { loadJsZip } from './vendor.js';
 
 const ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ldquo: '“', rdquo: '”',
@@ -108,17 +109,60 @@ function parseToc(tocText, tocPath, isNcx) {
  * @param {ArrayBuffer} buffer EPUB 文件
  * @returns {Promise<{title:string, author:string, chapters:Array<{title:string,content:string}>, text:string}>}
  */
+/**
+ * 统一的 ZIP 读取接口：优先用 JSZip（对各种奇怪的 ZIP 更宽容），
+ * 拿不到就退回项目自带的最小实现。
+ * @returns {Promise<{names: () => string[], text: (name: string) => Promise<string|null>}>}
+ */
+export async function openZip(buffer) {
+  try {
+    const JSZip = await loadJsZip();
+    const zip = await JSZip.loadAsync(buffer);
+    return {
+      via: 'jszip',
+      names: () => Object.keys(zip.files).filter((n) => !zip.files[n].dir),
+      text: async (name) => {
+        const file = zip.file(name);
+        return file ? file.async('string') : null;
+      },
+    };
+  } catch {
+    const entries = await readZip(buffer);
+    return {
+      via: 'builtin',
+      names: () => [...entries.keys()],
+      text: (name) => readZipText(entries, name),
+    };
+  }
+}
+
 export async function parseEpub(buffer) {
-  const zip = await readZip(buffer);
-  const container = await readZipText(zip, 'META-INF/container.xml');
+  const zip = await openZip(buffer);
+  const container = await zip.text('META-INF/container.xml');
   const rootfileRe = tagRe('rootfile', '[^>]*>');
   let opfPath = container ? attr((container.match(rootfileRe) || [''])[0], 'full-path') : '';
   if (!opfPath) {
-    opfPath = [...zip.keys()].find((n) => n.toLowerCase().endsWith('.opf')) || '';
+    opfPath = zip.names().find((n) => n.toLowerCase().endsWith('.opf')) || '';
   }
-  if (!opfPath) throw new Error('EPUB 里找不到 OPF 文件');
+  if (!opfPath) {
+    const names = zip.names();
+    if (names.some((n) => /\.(xhtml|html|htm)$/i.test(n))) {
+      // 没有 OPF，但有网页文件：按文件名顺序当作章节
+      const docs = names.filter((n) => /\.(xhtml|html|htm)$/i.test(n)).sort();
+      const chapters = [];
+      for (const name of docs) {
+        const html = await zip.text(name);              // eslint-disable-line no-await-in-loop
+        const content = htmlToText(html || '');
+        if (content.replace(/\s/g, '')) chapters.push({ title: firstTagText(html) || name.split('/').pop(), content });
+      }
+      if (chapters.length) {
+        return { title: '', author: '', chapters, text: chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n') };
+      }
+    }
+    throw new Error('这个 EPUB 里找不到 OPF 索引文件，可能带 DRM 或者文件损坏');
+  }
 
-  const opf = await readZipText(zip, opfPath);
+  const opf = await zip.text(opfPath);
   const base = opfPath.includes('/') ? opfPath.replace(/[^/]+$/, '') : '';
 
   const metaText = (name) => {
@@ -149,8 +193,8 @@ export async function parseEpub(buffer) {
   let tocMap = new Map();
   const navItem = [...manifest.values()].find((i) => (i.properties || '').includes('nav'));
   const ncxItem = [...manifest.values()].find((i) => i.type === 'application/x-dtbncx+xml');
-  if (navItem) tocMap = parseToc(await readZipText(zip, navItem.href), navItem.href, false);
-  if (!tocMap.size && ncxItem) tocMap = parseToc(await readZipText(zip, ncxItem.href), ncxItem.href, true);
+  if (navItem) tocMap = parseToc(await zip.text(navItem.href), navItem.href, false);
+  if (!tocMap.size && ncxItem) tocMap = parseToc(await zip.text(ncxItem.href), ncxItem.href, true);
 
   // spine 顺序
   const spine = [];
@@ -166,7 +210,7 @@ export async function parseEpub(buffer) {
 
   const chapters = [];
   for (const doc of docs) {
-    const html = await readZipText(zip, doc.href);
+    const html = await zip.text(doc.href);
     if (html == null) continue;
     const content = htmlToText(html);
     if (!content.replace(/\s/g, '')) continue;

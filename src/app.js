@@ -4,8 +4,9 @@
  */
 import { decodeBuffer, SUPPORTED_ENCODINGS } from './encoding.js';
 import { cleanText, cleanBookTitle, CLEAN_DEFAULTS } from './cleaner.js';
-import { parseEpub } from './formats/epub.js';
-import { parsePdf } from './formats/pdf.js';
+import {
+  FORMAT_GROUPS, readAnyFile, groupOf, extOf,
+} from './formats/readers.js';
 import {
   CHAPTER_RULES, DEFAULT_SPLIT_OPTIONS, splitChapters, analyzeRules, suggestRuleIds,
 } from './chapters.js';
@@ -15,7 +16,7 @@ import {
   loadSettings, saveSettings, DEFAULT_SETTINGS,
 } from './store.js';
 
-const APP_VERSION = '1.3.0';   // 显示在阅读设置里，方便确认用的是哪一版
+const APP_VERSION = '1.4.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -46,6 +47,7 @@ const state = {
   editingMark: null,
   nativeChapters: null,// 电子书自带目录
   batchAbort: false,
+  importFormat: 'txt',   // 当前导入分栏：pdf / epub / txt / other
 };
 
 /* =========================================================
@@ -72,7 +74,7 @@ function applySettings() {
     .forEach((k) => { $(`set-${k}`).value = s[k]; });
   $('set-fontFamily').value = s.fontFamily;
   $('shelf-sort').value = s.shelfSort || 'recent';
-  $('app-version').textContent = `版本 ${APP_VERSION} · 支持 TXT / EPUB / PDF`;
+  $('app-version').textContent = `版本 ${APP_VERSION} · PDF / EPUB / TXT / MOBI / DOCX / HTML / MD / FB2 / RTF`;
   [...$('theme-row').children].forEach((b) => b.classList.toggle('active', b.dataset.themeValue === s.theme));
   [...$('mode-row').children].forEach((b) => b.classList.toggle('active', b.dataset.modeValue === (s.readingMode || 'scroll')));
   saveSettings(s);
@@ -350,7 +352,7 @@ function showShelf() {
   $('btn-export').hidden = true;
   $('btn-marks').hidden = true;
   $('top-book').textContent = '清风阅读';
-  $('top-chapter').textContent = '本地小说阅读器 · TXT / EPUB / PDF';
+  $('top-chapter').textContent = '本地小说阅读器 · PDF / EPUB / TXT / MOBI …';
   $('progressbar').style.width = '0';
   closePanels();
   refreshShelf();
@@ -557,12 +559,16 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
   }
   encSelect.value = 'auto';
   encSelect.disabled = !encodingInfo.buffer || state.pending.kind !== 'txt';
-  const kindLabel = { txt: 'TXT', epub: 'EPUB', pdf: 'PDF', paste: '粘贴文本' }[state.pending.kind] || 'TXT';
+  const kindLabel = {
+    txt: 'TXT', epub: 'EPUB', pdf: 'PDF', paste: '粘贴文本',
+    docx: 'DOCX', html: 'HTML', md: 'Markdown', fb2: 'FB2', rtf: 'RTF', mobi: 'MOBI/AZW3',
+  }[state.pending.kind] || '文本';
+  const viaNote = encodingInfo.via ? `（解析器：${encodingInfo.via}）` : '';
   $('import-encoding-hint').textContent = state.pending.kind === 'txt'
     ? (encodingInfo.buffer
       ? `自动识别结果：${encodingInfo.encoding}${encodingInfo.confident ? '' : '（把握不大，若显示乱码请手动切换）'}`
       : '粘贴导入的文本无需选择编码')
-    : `${kindLabel} 文件已解析为文本，无需选择编码`;
+    : `${kindLabel} 文件已解析为文本${viaNote}，无需选择编码`;
 
   const suggested = existing && existing.splitOptions && existing.splitOptions.ruleIds.length
     ? existing.splitOptions.ruleIds
@@ -659,7 +665,33 @@ async function confirmImport() {
   toast(`《${title}》已导入，共 ${chapters.length} 章`);
 }
 
-const SUPPORTED_EXT = /\.(txt|text|epub|pdf)$/i;
+const FORMAT_ICONS = { pdf: '📕', epub: '📗', txt: '📄', other: '🗂️' };
+
+function activeGroup() {
+  return FORMAT_GROUPS.find((g) => g.id === (state.importFormat || 'pdf')) || FORMAT_GROUPS[0];
+}
+
+/** 渲染导入分栏，并让文件选择框只认当前这一栏的类型 */
+function renderFormatTabs() {
+  const bar = $('format-tabs');
+  bar.innerHTML = '';
+  for (const group of FORMAT_GROUPS) {
+    const btn = el('button', group.id === state.importFormat ? 'active' : null, group.label);
+    btn.dataset.fmt = group.id;
+    btn.addEventListener('click', () => {
+      state.importFormat = group.id;
+      try { localStorage.setItem('novel-reader:importFormat', group.id); } catch { /* 忽略 */ }
+      renderFormatTabs();
+    });
+    bar.appendChild(btn);
+  }
+  const group = activeGroup();
+  $('file-input').setAttribute('accept', group.accept);
+  $('btn-choose').textContent = `选择 ${group.label} 文件`;
+  $('btn-choose-folder').textContent = `导入文件夹里的 ${group.label}`;
+  $('dz-icon').textContent = FORMAT_ICONS[group.id] || '📖';
+  $('dz-hint').textContent = `${group.hint} · 也可以把文件或整个文件夹拖到这里`;
+}
 
 /** 从文件的相对路径推断分类：用它所在的那层文件夹名 */
 function categoryFromPath(file) {
@@ -670,44 +702,15 @@ function categoryFromPath(file) {
   return parts[parts.length - 1];    // 直接所在的文件夹
 }
 
-/** 按扩展名解析成统一的「待导入」结构 */
+/** PDF 需要密码时问一下用户 */
+function askPdfPassword() {
+  // eslint-disable-next-line no-alert
+  return prompt('这个 PDF 有密码保护，请输入打开密码：');
+}
+
 async function readBookFile(file) {
-  const buffer = await file.arrayBuffer();
-  const lower = (file.name || '').toLowerCase();
-  if (lower.endsWith('.epub')) {
-    const book = await parseEpub(buffer);
-    return {
-      kind: 'epub',
-      raw: book.text,
-      name: cleanBookTitle(book.title || file.name),
-      encoding: 'utf-8',
-      confident: true,
-      native: book.chapters,
-      buffer: null,
-    };
-  }
-  if (lower.endsWith('.pdf')) {
-    const pdf = await parsePdf(buffer);
-    return {
-      kind: 'pdf',
-      raw: pdf.text,
-      name: cleanBookTitle(pdf.title || file.name),
-      encoding: 'utf-8',
-      confident: true,
-      native: null,
-      buffer: null,
-    };
-  }
-  const decoded = decodeBuffer(buffer);
-  return {
-    kind: 'txt',
-    raw: decoded.text,
-    name: cleanBookTitle(file.name),
-    encoding: decoded.encoding,
-    confident: decoded.confident,
-    native: null,
-    buffer,
-  };
+  const info = await readAnyFile(file, { onPassword: askPdfPassword });
+  return { ...info, buffer: info.buffer || null };
 }
 
 /** 自带目录 → 章节数组（逐章清洗） */
@@ -719,11 +722,27 @@ function nativeToChapters(native, cleanOpts, splitOpts) {
 }
 
 async function handleFiles(files, opts = {}) {
-  const list = [...files].filter((f) => SUPPORTED_EXT.test(f.name || ''));
+  const group = activeGroup();
+  const all = [...files];
+  const list = all.filter((f) => group.exts.includes(extOf(f.name)));
+  const skipped = all.length - list.length;
   if (!list.length) {
-    toast('没有找到可导入的 TXT / EPUB / PDF 文件');
+    // 拖进来的文件都属于另一栏时，自动切过去（用"选择文件"按钮则始终只认当前栏）
+    const others = [...new Set(all.map((f) => groupOf(f.name)).filter(Boolean).map((g) => g.id))];
+    if (others.length === 1) {
+      state.importFormat = others[0];
+      renderFormatTabs();
+      const target = activeGroup();
+      toast(`已切到「${target.label}」栏`);
+      await handleFiles(all, opts);
+      return;
+    }
+    toast(others.length
+      ? `这些文件分属「${others.join('、')}」几类，请分别切到对应的栏导入`
+      : `当前在「${group.label}」栏，只接受 ${group.exts.map((e) => `.${e}`).join(' / ')}`);
     return;
   }
+  if (skipped > 0) toast(`「${group.label}」栏只导入了 ${list.length} 个文件，忽略了 ${skipped} 个其它类型`);
   if (list.length === 1 && !opts.batch) {
     try {
       const info = await readBookFile(list[0]);
@@ -1709,6 +1728,8 @@ async function main() {
   applySettings();
   bindSettings();
   bindImportInputs();
+  try { state.importFormat = localStorage.getItem('novel-reader:importFormat') || 'txt'; } catch { state.importFormat = 'txt'; }
+  renderFormatTabs();
   bindEvents();
   setupPwa();
   await refreshShelf();

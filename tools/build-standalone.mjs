@@ -16,11 +16,25 @@ const MODULES = [
   'src/chapters.js',
   'src/cleaner.js',
   'src/formats/zip.js',
+  'src/formats/vendor.js',
   'src/formats/epub.js',
   'src/formats/pdf.js',
+  'src/formats/readers.js',
   'src/store.js',
   'src/app.js',
 ];
+
+// 第三方库：以 <script type="text/plain"> 内联进页面，运行时转成 blob URL 加载
+const VENDOR = [
+  ['vendor-jszip', 'vendor/jszip/jszip.min.js'],
+  ['vendor-pdfjs', 'vendor/pdfjs/pdf.min.js'],
+  ['vendor-pdfjs-worker', 'vendor/pdfjs/pdf.worker.min.js'],
+];
+
+const vendorBlocks = () => VENDOR.map(([id, file]) => {
+  const src = read(file).replace(/<\/script/gi, '<\\/script');
+  return `<script type="text/plain" id="${id}">\n${src}\n</scr` + 'ipt>';
+}).join('\n');
 
 const stripModuleSyntax = (code) => code
   .replace(/^\s*import\s+[^;]*?from\s+['"][^'"]+['"];\s*$/gm, '')
@@ -37,7 +51,7 @@ const html = read('index.html')
   .replace('<link rel="stylesheet" href="assets/style.css">', () => `<style>\n${read('assets/style.css')}\n</style>`)
   .replace(
     '<script type="module" src="src/app.js"></script>',
-    () => `<script>\n(function () {\n'use strict';\n${script}\n})();\n</scr` + `ipt>`,
+    () => `${vendorBlocks()}\n<script>\n(function () {\n'use strict';\n${script}\n})();\n</scr` + `ipt>`,
   );
 
 mkdirSync(resolve(root, 'dist'), { recursive: true });

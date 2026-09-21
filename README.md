@@ -2,7 +2,8 @@
 
 一个纯前端（无后端、无第三方依赖、不上传任何数据）的网页版小说阅读器：
 
-- 支持 **TXT / EPUB / PDF** 导入，可以**一键把整个文件夹的书入库**（按子目录自动分类）
+- **PDF / EPUB / TXT 分栏导入**，每栏只认自己的类型；另有 MOBI、AZW3、DOCX、HTML、Markdown、FB2、RTF
+- 可以**一键把整个文件夹的书入库**（按子目录自动分类）
 - 自动识别编码，**清除乱码与推广网址**，**智能排版**
 - **多种章节划分格式**，并能**把换了写法、被并进上一章的漏章补回来**
 - **上下无缝滚动阅读**（也可切换成一章一页），随时**跳转任意章节**
@@ -75,7 +76,25 @@ npm run build      # 生成 dist/novel-reader.html
 排版阶段也会保护这些"疑似标题行"，不让它们被合并进正文，否则后面就补不回来了。
 默认开启，可在导入弹窗关闭。
 
-### 4. 导入 TXT / EPUB / PDF，一键导入文件夹
+### 4. 分栏导入：PDF / EPUB / TXT / 其他格式
+
+书架顶部分成 **PDF、EPUB、TXT、其他格式** 四栏，**每栏只认自己的类型**：
+选文件时文件框只列该类型，导入文件夹时也只扫描该类型（PDF 栏只捡 `.pdf`，EPUB 栏只捡 `.epub`，
+依此类推）。拖进来的文件如果整批属于另一栏，会自动切到那一栏再导入。
+
+解析用的是社区里最成熟的实现，直接 vendored 进仓库（见 `vendor/README.md`）：
+
+| 格式 | 解析方式 |
+| --- | --- |
+| PDF | [Mozilla pdf.js](https://github.com/mozilla/pdf.js) 3.11.174（UMD 构建 + Worker），加载不到时退回自研最小解析器 |
+| EPUB | [JSZip](https://github.com/Stuk/jszip) 3.10.1 解包 + 自研 OPF / nav / ncx 解析，JSZip 不可用时退回自研 ZIP 读取 |
+| TXT | 自研多编码识别（UTF-8 / GBK / GB18030 / BIG5 / UTF-16） |
+| MOBI / AZW / AZW3 / PRC | 自研 PalmDB + PalmDOC 解压（带 DRM 或 HUFF/CDIC 压缩会明确提示） |
+| DOCX | JSZip + `word/document.xml` |
+| HTML / XHTML | 标签转文本，按 `<meta charset>` 或 XML 声明选编码 |
+| Markdown | 去掉标记保留正文 |
+| FB2 | XML 正文提取，按 XML 声明选编码（支持 GBK） |
+| RTF | 控制字剥离 + `\'xx` 字节按 `\ansicpg` 码页还原（936/950/1252） |
 
 - **EPUB**：自己实现的最小 ZIP 读取（浏览器原生 `DecompressionStream`）+ OPF / spine 解析，
   兼容带命名空间前缀的写法（`<opf:item>`、`<ncx:navPoint>`）、EPUB2 的 `toc.ncx` 与
@@ -134,7 +153,10 @@ src/chapters.js           章节规则、自动识别、切分、章节号解析
 src/cleaner.js            网址 / 广告 / 乱码清洗、自动排版、书名清洗
 src/formats/zip.js        最小 ZIP 读取（EPUB 用）
 src/formats/epub.js       EPUB 解析（OPF / spine / nav / ncx）
-src/formats/pdf.js        最小 PDF 文本提取
+src/formats/pdf.js        自研最小 PDF 文本提取（pdf.js 的兜底）
+src/formats/readers.js    多格式统一读取层（PDF/EPUB/TXT/MOBI/DOCX/HTML/MD/FB2/RTF）
+src/formats/vendor.js     第三方库按需加载（模块版读 vendor/，单文件版读内联源码）
+vendor/                   vendored 的 pdf.js 与 JSZip（含来源与许可证说明）
 src/store.js              IndexedDB 书架 / 书签笔记 + localStorage 阅读设置
 manifest.webmanifest      PWA 应用清单
 sw.js                     Service Worker（应用外壳离线缓存）
@@ -148,7 +170,7 @@ samples/                  示例：脏 TXT（UTF-8/GBK）、缺章 TXT、EPUB、
 ## 测试
 
 ```bash
-npm test     # 71 项：网址/广告/乱码清洗、排版、8 类分章、补章、书名清洗、编码、EPUB、PDF
+npm test     # 78 项：网址/广告/乱码清洗、排版、8 类分章、补章、书名清洗、编码、EPUB、PDF
 ```
 
 浏览器端用 Playwright 跑了三套端到端流程（共 74 项，模块版全过；单文件版跳过 PWA 相关项）：
@@ -156,6 +178,8 @@ npm test     # 71 项：网址/广告/乱码清洗、排版、8 类分章、补�
 - 回归 24 项：导入 GBK TXT → 清洗预览 → 阅读 → 翻章 → 跳章 → 目录/正文搜索 → 主题字号 → 刷新续读 → 重新排版 → 粘贴导入
 - 分章与格式 24 项：补章（16 章 vs 关闭补章 12 章）→ 无缝滚动上下自动接章 → 模式切换 →
   EPUB（自带目录 / 按规则）→ PDF → 批量导入与书名清洗、重复跳过
+- 分栏与多格式 19 项：四个分栏的过滤与文案、PDF 走 pdf.js、对象流 PDF、
+  MOBI / DOCX / HTML / Markdown / FB2 / RTF 各自能读出正文、混合类型只导入本栏的
 - 格式健壮性 10 项：带命名空间前缀的 EPUB、EPUB3 nav 目录、整本单文档 EPUB、
   对象流(ObjStm) PDF、坏文件的错误提示、版本号
 - 书架与阅读辅助 26 项：按目录建分类 → 分类筛选/搜索/排序/改分类 → 加书签 → 选中文字写笔记 →
