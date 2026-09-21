@@ -92,6 +92,11 @@
         <h2 class="chapter-title" id="chapter-title"></h2>
         <div class="chapter-body" id="chapter-body"></div>
       </article>
+      <div class="resume-banner hidden" id="resume-banner">
+        <span id="resume-text"></span>
+        <button class="ghost-btn" id="resume-restart">回到本章开头</button>
+        <button class="icon-btn" id="resume-close" aria-label="关闭">✕</button>
+      </div>
       <div class="chapter-flow hidden" id="chapter-flow"></div>
       <div class="flow-tip hidden" id="flow-tip">已到全书结尾</div>
       <nav class="chapter-nav">
@@ -174,6 +179,19 @@
       <div class="row">
         <button class="ghost-btn" id="btn-autoscroll">开始自动滚动</button>
         <input type="range" id="set-autoScrollSpeed" min="10" max="200" step="5">
+      </div>
+    </div>
+    <div class="field">
+      <label>数据备份</label>
+      <div class="row">
+        <button class="ghost-btn" id="btn-export-backup">导出备份</button>
+        <button class="ghost-btn" id="btn-export-light">只导进度笔记</button>
+        <button class="ghost-btn" id="btn-import-backup">恢复备份</button>
+        <input type="file" id="backup-input" accept=".json,application/json" hidden>
+      </div>
+      <div class="muted small">
+        备份是一个 JSON 文件，含书架、阅读进度、书签笔记与设置；
+        "只导进度笔记"不含正文，体积小，适合书还在、只想保住进度的情况。
       </div>
     </div>
     <div class="field">

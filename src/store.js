@@ -127,6 +127,100 @@ export async function markCounts() {
   return map;
 }
 
+/* ---------------- 备份与恢复 ---------------- */
+
+export const BACKUP_FORMAT = 'qingfeng-reader-backup';
+
+/**
+ * 导出备份。
+ * @param {{includeText?: boolean, onProgress?: Function}} options
+ *   includeText=false 时只导出书架信息、阅读进度、书签笔记与设置（体积很小，
+ *   适合"书还在、只想保住进度和笔记"的场景）。
+ */
+export async function exportBackup(options = {}) {
+  const includeText = options.includeText !== false;
+  const books = await listBooks();
+  const out = {
+    format: BACKUP_FORMAT,
+    version: 1,
+    createdAt: Date.now(),
+    includeText,
+    settings: loadSettings(),
+    books: [],
+  };
+  for (let i = 0; i < books.length; i += 1) {
+    const meta = books[i];
+    /* eslint-disable no-await-in-loop */
+    const marks = await getMarks(meta.id);
+    const entry = { meta, marks };
+    if (includeText) {
+      const content = await getContent(meta.id);
+      if (content) {
+        entry.content = {
+          raw: content.raw || '',
+          clean: content.clean || '',
+          chapterTexts: content.chapterTexts || [],
+          nativeChapters: content.nativeChapters || null,
+        };
+      }
+    }
+    /* eslint-enable no-await-in-loop */
+    out.books.push(entry);
+    if (options.onProgress) options.onProgress(i + 1, books.length);
+  }
+  return out;
+}
+
+/**
+ * 恢复备份。同一本书（id 相同，或书名+字数相同）默认跳过。
+ * @returns {Promise<{restored: number, merged: number, skipped: number, settings: boolean}>}
+ */
+export async function importBackup(data, options = {}) {
+  if (!data || data.format !== BACKUP_FORMAT) throw new Error('这不是清风阅读的备份文件');
+  const existing = await listBooks();
+  const byId = new Map(existing.map((b) => [b.id, b]));
+  const byName = new Map(existing.map((b) => [`${b.title}|${b.charCount}`, b]));
+  const result = { restored: 0, merged: 0, skipped: 0, settings: false };
+
+  for (const entry of data.books || []) {
+    const meta = entry.meta;
+    if (!meta || !meta.id) continue;
+    const sameId = byId.get(meta.id);
+    const sameBook = sameId || byName.get(`${meta.title}|${meta.charCount}`);
+    /* eslint-disable no-await-in-loop */
+    if (sameBook) {
+      // 书已经在书架上：只把进度和书签笔记合并回来
+      const target = sameBook;
+      const incomingTime = meta.lastReadAt || 0;
+      if (incomingTime > (target.lastReadAt || 0) && meta.progress) {
+        target.progress = meta.progress;
+        target.lastReadAt = incomingTime;
+      }
+      if (!target.category && meta.category) target.category = meta.category;
+      await updateBook(target);
+      if ((entry.marks || []).length) {
+        const current = await getMarks(target.id);
+        const ids = new Set(current.map((m) => m.id));
+        const merged = current.concat((entry.marks || []).filter((m) => !ids.has(m.id)));
+        await saveMarks(target.id, merged);
+      }
+      result.merged += 1;
+      continue;
+    }
+    if (!entry.content) { result.skipped += 1; continue; }   // 轻量备份里没有正文，书不在就没法恢复
+    await saveBook(meta, entry.content);
+    if ((entry.marks || []).length) await saveMarks(meta.id, entry.marks);
+    result.restored += 1;
+    /* eslint-enable no-await-in-loop */
+  }
+
+  if (options.restoreSettings !== false && data.settings) {
+    saveSettings({ ...loadSettings(), ...data.settings });
+    result.settings = true;
+  }
+  return result;
+}
+
 export const DEFAULT_SETTINGS = {
   theme: 'sepia',
   shelfSort: 'recent',      // recent | title | created

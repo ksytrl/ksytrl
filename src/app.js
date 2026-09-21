@@ -12,11 +12,11 @@ import {
 } from './chapters.js';
 import {
   listBooks, getContent, saveBook, updateBook, deleteBook, newId,
-  getMarks, saveMarks, markCounts,
+  getMarks, saveMarks, markCounts, exportBackup, importBackup,
   loadSettings, saveSettings, DEFAULT_SETTINGS,
 } from './store.js';
 
-const APP_VERSION = '1.4.0';   // 显示在阅读设置里，方便确认用的是哪一版
+const APP_VERSION = '1.5.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -110,6 +110,14 @@ function bindSettings() {
     applySettings();
     if (state.book) renderReader(state.chapterIndex, 0);
     toast(btn.dataset.modeValue === 'scroll' ? '已切换为上下无缝滚动' : '已切换为一章一页');
+  });
+  $('btn-export-backup').addEventListener('click', () => doExportBackup(true));
+  $('btn-export-light').addEventListener('click', () => doExportBackup(false));
+  $('btn-import-backup').addEventListener('click', () => $('backup-input').click());
+  $('backup-input').addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (file) doImportBackup(file);
   });
   $('btn-reset-settings').addEventListener('click', () => {
     state.settings = { ...DEFAULT_SETTINGS };
@@ -354,6 +362,7 @@ function showShelf() {
   $('top-book').textContent = '清风阅读';
   $('top-chapter').textContent = '本地小说阅读器 · PDF / EPUB / TXT / MOBI …';
   $('progressbar').style.width = '0';
+  hideResumeHint();
   closePanels();
   refreshShelf();
 }
@@ -905,7 +914,13 @@ async function openBook(id) {
   await loadMarks();
   renderMarks();
   renderToc();
-  renderReader(state.chapterIndex, meta.progress ? meta.progress.ratio : 0);
+  const resumeRatio = meta.progress ? meta.progress.ratio : 0;
+  renderReader(state.chapterIndex, resumeRatio);
+  if (meta.lastReadAt && (state.chapterIndex > 0 || resumeRatio > 0.02)) {
+    showResumeHint(state.chapterIndex, resumeRatio);
+  } else {
+    hideResumeHint();
+  }
 }
 
 function chapterTitleAt(i) {
@@ -972,6 +987,35 @@ function syncJumpInput(node, value) {
 function clearJumpDirty() {
   $('jump-input').dataset.dirty = '';
   $('toc-jump').dataset.dirty = '';
+}
+
+let resumeTimer = null;
+/** 打开书时提示"已回到上次读到的位置"，并在正文里画一条分隔线 */
+function showResumeHint(chapterIndex, ratio) {
+  const banner = $('resume-banner');
+  const percent = Math.round((ratio || 0) * 100);
+  $('resume-text').textContent = `已回到上次读到的位置 · 第 ${chapterIndex + 1} 章 ${chapterTitleAt(chapterIndex)}`
+    + (percent > 1 ? `（本章 ${percent}%）` : '');
+  banner.classList.remove('hidden');
+  clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => banner.classList.add('hidden'), 8000);
+
+  // 在恢复到的位置插一条"上次读到这里"
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.resume-mark').forEach((n) => n.remove());
+    if (!ratio || ratio <= 0.02) return;
+    const paragraphs = [...document.querySelectorAll('#view-reader p')]
+      .filter((p) => p.textContent.trim());
+    const target = paragraphs.find((p) => p.getBoundingClientRect().bottom > 160);
+    if (!target || !target.parentNode) return;
+    const mark = el('div', 'resume-mark', '上次读到这里');
+    target.parentNode.insertBefore(mark, target);
+  });
+}
+
+function hideResumeHint() {
+  $('resume-banner').classList.add('hidden');
+  clearTimeout(resumeTimer);
 }
 
 function updateChapterChrome() {
@@ -1111,6 +1155,7 @@ function goChapter(index, opts = {}) {
     return;
   }
   state.highlight = opts.highlight || '';
+  hideResumeHint();
   renderReader(index, 0);
   if (opts.closePanel !== false) closePanels();
 }
@@ -1626,6 +1671,12 @@ function bindEvents() {
     );
   });
 
+  $('resume-close').addEventListener('click', hideResumeHint);
+  $('resume-restart').addEventListener('click', () => {
+    hideResumeHint();
+    document.querySelectorAll('.resume-mark').forEach((n) => n.remove());
+    renderReader(state.chapterIndex, 0);
+  });
   $('btn-prev').addEventListener('click', () => goChapter(state.chapterIndex - 1, { closePanel: false }));
   $('btn-next').addEventListener('click', () => goChapter(state.chapterIndex + 1, { closePanel: false }));
   const jump = (value) => {
@@ -1701,6 +1752,55 @@ function bindEvents() {
 /* =========================================================
  * 启动
  * =======================================================*/
+/* =========================================================
+ * 备份与恢复
+ * =======================================================*/
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function doExportBackup(includeText) {
+  toast(includeText ? '正在打包备份，书多的话要等一会…' : '正在导出进度与笔记…');
+  try {
+    const data = await exportBackup({ includeText });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    downloadBlob(blob, `清风阅读备份-${includeText ? '完整' : '进度笔记'}-${stamp}.json`);
+    const size = (blob.size / 1024 / 1024).toFixed(2);
+    toast(`已导出 ${data.books.length} 本书的备份（${size} MB）`);
+  } catch (err) {
+    showError('', `导出失败：${err.message}`, ['书特别多时可以试试"只导进度笔记"']);
+  }
+}
+
+async function doImportBackup(file) {
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const result = await importBackup(data);
+    await refreshShelf();
+    if (state.book) {
+      state.marks = await getMarks(state.book.id).catch(() => state.marks);
+      renderMarks();
+    }
+    applySettings();
+    const parts = [];
+    if (result.restored) parts.push(`恢复 ${result.restored} 本`);
+    if (result.merged) parts.push(`合并进度/笔记 ${result.merged} 本`);
+    if (result.skipped) parts.push(`跳过 ${result.skipped} 本（备份里没有正文且书架上没有）`);
+    toast(parts.length ? parts.join('，') : '备份里没有可恢复的内容');
+  } catch (err) {
+    showError(file.name, `恢复失败：${err.message}`, ['请选择由本应用导出的 .json 备份文件']);
+  }
+}
+
 /* =========================================================
  * PWA：离线可用 + 可安装
  * =======================================================*/
