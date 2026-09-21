@@ -13,6 +13,7 @@ import { parsePdf, stripRunningHeads } from '../src/formats/pdf.js';
 import {
   readDocx, readFb2, readHtml, readMarkdown, readRtf, readMobi, groupOf, FORMAT_GROUPS,
 } from '../src/formats/readers.js';
+import { parsePageRange, tidyOcrText, ocrPaths, OCR_LANGS } from '../src/formats/ocr.js';
 
 const readBuffer = async (path) => {
   const buf = await readFile(new URL(path, import.meta.url));
@@ -258,6 +259,20 @@ group('更多格式（MOBI / DOCX / HTML / Markdown / FB2 / RTF）');
     groupOf('a.pdf').id === 'pdf' && groupOf('a.epub').id === 'epub'
     && groupOf('a.txt').id === 'txt' && groupOf('a.mobi').id === 'other' && groupOf('a.zip') === null,
     JSON.stringify(FORMAT_GROUPS.map((g) => g.id)));
+}
+
+/* ---------- OCR ---------- */
+group('OCR（扫描版 PDF）');
+{
+  check('页码范围解析', parsePageRange('1-3,7', 20).join() === '1,2,3,7' && parsePageRange('', 4).join() === '1,2,3,4',
+    JSON.stringify(parsePageRange('1-3,7', 20)));
+  check('页码范围不会越界', parsePageRange('18-30', 20).join() === '18,19,20', JSON.stringify(parsePageRange('18-30', 20)));
+  const messy = '夜 色 沉 沉 ， 他 抬 头\n看 了 看 天\n\n第 二 段 开 始';
+  check('去掉中文字间空格但保留换行', tidyOcrText(messy) === '夜色沉沉，他抬头\n看了看天\n\n第二段开始', JSON.stringify(tidyOcrText(messy)));
+  check('中文语言包走本地、英文走 CDN',
+    ocrPaths('chi_sim').langPath.startsWith('vendor/') && ocrPaths('eng').langPath.startsWith('https://'),
+    JSON.stringify([ocrPaths('chi_sim').langPath, ocrPaths('eng').langPath]));
+  check('提供了四种识别语言', OCR_LANGS.length === 4 && OCR_LANGS.some((l) => l.id === 'chi_sim+eng'), JSON.stringify(OCR_LANGS.map((l) => l.id)));
 }
 
 console.log(results.join('\n'));

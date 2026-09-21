@@ -7,6 +7,7 @@ import { cleanText, cleanBookTitle, CLEAN_DEFAULTS } from './cleaner.js';
 import {
   FORMAT_GROUPS, readAnyFile, groupOf, extOf,
 } from './formats/readers.js';
+import { ocrPdf, OCR_LANGS, OCR_SCALES } from './formats/ocr.js';
 import {
   CHAPTER_RULES, DEFAULT_SPLIT_OPTIONS, splitChapters, analyzeRules, suggestRuleIds,
 } from './chapters.js';
@@ -16,7 +17,7 @@ import {
   loadSettings, saveSettings, DEFAULT_SETTINGS,
 } from './store.js';
 
-const APP_VERSION = '1.5.0';   // 显示在阅读设置里，方便确认用的是哪一版
+const APP_VERSION = '1.6.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -45,6 +46,7 @@ const state = {
   marks: [],           // 当前书的书签与笔记
   markCounts: new Map(),
   editingMark: null,
+  ocr: null,
   nativeChapters: null,// 电子书自带目录
   batchAbort: false,
   importFormat: 'txt',   // 当前导入分栏：pdf / epub / txt / other
@@ -152,12 +154,20 @@ function closePanels() {
 function showModal(id) { $(id).classList.remove('hidden'); }
 
 /** 导入失败时给出看得懂的原因和下一步建议 */
-function showError(fileName, message, tips = []) {
+function showError(fileName, message, tips = [], action = null) {
   $('error-file').textContent = fileName ? `文件：${fileName}` : '';
   $('error-msg').textContent = message;
   const list = $('error-tips');
   list.innerHTML = '';
   for (const tip of tips) list.appendChild(el('li', null, tip));
+  const btn = $('error-action');
+  btn.classList.toggle('hidden', !action);
+  if (action) {
+    btn.textContent = action.label;
+    btn.onclick = () => { hideModal('error-modal'); action.run(); };
+  } else {
+    btn.onclick = null;
+  }
   showModal('error-modal');
 }
 
@@ -546,7 +556,10 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
     bookId: existing ? existing.id : null,
     native: native && native.length ? native : null,
     kind: encodingInfo.kind || 'txt',
+    file: encodingInfo.file || null,
   };
+  // PDF 文字提取不理想时，可以直接转去 OCR
+  $('btn-ocr-again').classList.toggle('hidden', !(encodingInfo.file && extOf(encodingInfo.file.name) === 'pdf'));
   $('source-field').hidden = !state.pending.native;
   // 有的 EPUB 整本只有一个 xhtml，自带"目录"只有一条，这时默认按规则重新分章
   const nativeUsable = !!(state.pending.native && state.pending.native.length > 1);
@@ -756,13 +769,21 @@ async function handleFiles(files, opts = {}) {
     try {
       const info = await readBookFile(list[0]);
       if (!info.raw || !info.raw.replace(/\s/g, '')) {
-        showError(list[0].name, '这个文件里没有解析出可读的文字。', importTips(list[0].name));
+        const ocrAction = extOf(list[0].name) === 'pdf'
+          ? { label: '用 OCR 识别文字', run: () => openOcrModal(list[0]) }
+          : null;
+        showError(list[0].name, '这个文件里没有解析出可读的文字。', importTips(list[0].name), ocrAction);
         return;
       }
       info.category = categoryFromPath(list[0]);
+      info.file = list[0];
       openImportModal(info.raw, info.name, info, null, info.native);
     } catch (err) {
-      showError(list[0].name, `读取失败：${err.message}`, importTips(list[0].name));
+      const file = list[0];
+      const ocrAction = extOf(file.name) === 'pdf'
+        ? { label: '用 OCR 识别文字', run: () => openOcrModal(file) }
+        : null;
+      showError(file.name, `读取失败：${err.message}`, importTips(file.name), ocrAction);
     }
     return;
   }
@@ -1634,6 +1655,20 @@ function bindEvents() {
     hideSelPop();
     addBookmark(text);
   });
+  $('ocr-start').addEventListener('click', runOcr);
+  $('ocr-stop').addEventListener('click', () => {
+    if (state.ocr) state.ocr.stop = true;
+    $('ocr-status').textContent = '正在停止……（当前这页识别完就停）';
+  });
+  $('ocr-use').addEventListener('click', useOcrResult);
+  $('ocr-cancel').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; hideModal('ocr-modal'); });
+  $('ocr-close').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; hideModal('ocr-modal'); });
+  $('btn-ocr-again').addEventListener('click', () => {
+    if (state.pending && state.pending.file) {
+      hideModal('import-modal');
+      openOcrModal(state.pending.file);
+    }
+  });
   $('error-ok').addEventListener('click', () => hideModal('error-modal'));
   $('error-close').addEventListener('click', () => hideModal('error-modal'));
   $('note-save').addEventListener('click', saveNoteFromModal);
@@ -1724,7 +1759,8 @@ function bindEvents() {
     }
     if (e.key === 'Escape') {
       closePanels(); hideSelPop();
-      hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal'); hideModal('error-modal');
+      hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal');
+      hideModal('error-modal'); hideModal('ocr-modal');
       return;
     }
     if (!state.book) return;
@@ -1752,6 +1788,106 @@ function bindEvents() {
 /* =========================================================
  * 启动
  * =======================================================*/
+/* =========================================================
+ * 扫描版 PDF 的 OCR
+ * =======================================================*/
+function fillOcrOptions() {
+  const langSelect = $('ocr-lang');
+  if (!langSelect.options.length) {
+    for (const lang of OCR_LANGS) {
+      const opt = document.createElement('option');
+      opt.value = lang.id;
+      opt.textContent = lang.label;
+      langSelect.appendChild(opt);
+    }
+  }
+  const scaleSelect = $('ocr-scale');
+  if (!scaleSelect.options.length) {
+    for (const scale of OCR_SCALES) {
+      const opt = document.createElement('option');
+      opt.value = String(scale.id);
+      opt.textContent = scale.label;
+      scaleSelect.appendChild(opt);
+    }
+    scaleSelect.value = '2';
+  }
+}
+
+function openOcrModal(file) {
+  fillOcrOptions();
+  state.ocr = { file, running: false, stop: false, result: null };
+  $('ocr-file').textContent = `文件：${file.name}`;
+  $('ocr-range').value = '';
+  $('ocr-bar').style.width = '0';
+  $('ocr-status').textContent = '识别在你自己电脑上跑，不会上传文件；每页大概几秒钟，页数多可以先只识别前几页试试。';
+  $('ocr-preview').classList.add('hidden');
+  $('ocr-preview').textContent = '';
+  $('ocr-start').classList.remove('hidden');
+  $('ocr-use').classList.add('hidden');
+  $('ocr-stop').classList.add('hidden');
+  showModal('ocr-modal');
+}
+
+async function runOcr() {
+  const task = state.ocr;
+  if (!task || task.running) return;
+  task.running = true;
+  task.stop = false;
+  $('ocr-start').classList.add('hidden');
+  $('ocr-stop').classList.remove('hidden');
+  $('ocr-use').classList.add('hidden');
+  try {
+    const buffer = await task.file.arrayBuffer();
+    const result = await ocrPdf(buffer, {
+      lang: $('ocr-lang').value,
+      scale: Number($('ocr-scale').value),
+      range: $('ocr-range').value,
+      shouldStop: () => task.stop,
+      onProgress: ({ done, total, message }) => {
+        const percent = total ? (done / total) * 100 : 0;
+        $('ocr-bar').style.width = `${percent.toFixed(1)}%`;
+        $('ocr-status').textContent = total
+          ? `${message || ''}（${done} / ${total} 页）`
+          : (message || '');
+      },
+    });
+    task.result = result;
+    if (!result.text.replace(/\s/g, '')) {
+      $('ocr-status').textContent = '没识别出文字。可以换个语言、把清晰度调高再试一次。';
+    } else {
+      const chars = result.text.replace(/\s/g, '').length;
+      $('ocr-status').textContent = `识别完成：${result.pages.length} 页，共 ${fmtNum(chars)} 字。`;
+      $('ocr-preview').textContent = result.text.slice(0, 600);
+      $('ocr-preview').classList.remove('hidden');
+      $('ocr-use').classList.remove('hidden');
+    }
+  } catch (err) {
+    $('ocr-status').textContent = `识别失败：${err.message}`;
+    if (/加载失败|未就绪|fetch|network/i.test(err.message)) {
+      $('ocr-status').textContent += '（单文件版的 OCR 需要联网下载识别引擎，离线请用模块版 / 已安装的应用）';
+    }
+  } finally {
+    task.running = false;
+    $('ocr-stop').classList.add('hidden');
+    $('ocr-start').classList.remove('hidden');
+    $('ocr-start').textContent = '重新识别';
+  }
+}
+
+function useOcrResult() {
+  const task = state.ocr;
+  if (!task || !task.result) return;
+  hideModal('ocr-modal');
+  const name = cleanBookTitle(task.file.name);
+  openImportModal(task.result.text, name, {
+    encoding: 'utf-8',
+    confident: true,
+    kind: 'pdf',
+    via: `OCR（${$('ocr-lang').selectedOptions[0].textContent}）`,
+    category: categoryFromPath(task.file),
+  });
+}
+
 /* =========================================================
  * 备份与恢复
  * =======================================================*/

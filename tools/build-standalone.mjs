@@ -20,6 +20,7 @@ const MODULES = [
   'src/formats/epub.js',
   'src/formats/pdf.js',
   'src/formats/readers.js',
+  'src/formats/ocr.js',
   'src/store.js',
   'src/app.js',
 ];
@@ -29,6 +30,7 @@ const VENDOR = [
   ['vendor-jszip', 'vendor/jszip/jszip.min.js'],
   ['vendor-pdfjs', 'vendor/pdfjs/pdf.min.js'],
   ['vendor-pdfjs-worker', 'vendor/pdfjs/pdf.worker.min.js'],
+  ['vendor-tesseract', 'vendor/tesseract/tesseract.min.js'],
 ];
 
 const vendorBlocks = () => VENDOR.map(([id, file]) => {
@@ -45,6 +47,8 @@ const script = MODULES
   .join('\n\n');
 
 const html = read('index.html')
+  // 单文件版没有 vendor 目录：OCR 的识别引擎与语言包改从 CDN 取
+  .replace("window.__NR_ASSETS = { base: 'vendor/' };", 'window.__NR_ASSETS = { base: null };')
   .replace('<link rel="manifest" href="manifest.webmanifest">', '')
   .replace('<link rel="apple-touch-icon" href="assets/icon-192.png">', '')
   // 用函数式 replacement，避免代码里的 $& / $1 被当成替换模式

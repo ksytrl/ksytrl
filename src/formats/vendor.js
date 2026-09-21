@@ -6,15 +6,15 @@
  * 加载失败不会致命，调用方会退回到项目自带的最小实现。
  */
 
-const inlineSource = (id) => {
+export const inlineSource = (id) => {
   const node = typeof document !== 'undefined' ? document.getElementById(id) : null;
   const text = node && node.textContent ? node.textContent.trim() : '';
   return text.length > 100 ? node.textContent : null;
 };
 
-const blobUrl = (source) => URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+export const blobUrl = (source) => URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
 
-function loadScript(url) {
+export function loadScript(url) {
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = url;

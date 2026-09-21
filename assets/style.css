@@ -342,3 +342,7 @@ kbd {
 .resume-mark::before, .resume-mark::after {
   content: ""; flex: 1; height: 1px; background: var(--accent); opacity: .45;
 }
+
+/* ===== OCR ===== */
+#ocr-modal .book-progress { height: 6px; margin: 14px 0 8px; }
+#ocr-preview { max-height: 170px; margin-top: 12px; }

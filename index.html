@@ -338,6 +338,7 @@
     <div class="modal-foot">
       <span class="muted small" id="import-status"></span>
       <div class="grow"></div>
+      <button class="ghost-btn hidden" id="btn-ocr-again">这页是图？用 OCR 识别</button>
       <button class="ghost-btn" id="import-cancel">取消</button>
       <button class="primary-btn" id="import-confirm">导入并开始阅读</button>
     </div>
@@ -387,13 +388,45 @@
       <p id="error-msg"></p>
       <ul class="muted small" id="error-tips"></ul>
     </div>
-    <div class="modal-foot"><div class="grow"></div>
-      <button class="primary-btn" id="error-ok">知道了</button></div>
+    <div class="modal-foot">
+      <button class="ghost-btn hidden" id="error-action"></button>
+      <div class="grow"></div>
+      <button class="primary-btn" id="error-ok">知道了</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="ocr-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong>OCR 识别扫描版 PDF</strong>
+      <button class="icon-btn" id="ocr-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <p class="muted small" id="ocr-file"></p>
+      <div class="row">
+        <div class="field grow"><label for="ocr-lang">语言</label>
+          <select id="ocr-lang"></select></div>
+        <div class="field grow"><label for="ocr-scale">清晰度</label>
+          <select id="ocr-scale"></select></div>
+      </div>
+      <div class="field"><label for="ocr-range">页码范围（留空＝全部；可写 1-20 或 1,5,8-10）</label>
+        <input type="text" id="ocr-range" placeholder="留空识别全部页"></div>
+      <div class="book-progress"><i id="ocr-bar"></i></div>
+      <p class="muted small" id="ocr-status">识别是在你自己电脑上跑的，不会上传文件；每页大概几秒钟。</p>
+      <pre class="preview-text hidden" id="ocr-preview"></pre>
+    </div>
+    <div class="modal-foot">
+      <button class="ghost-btn hidden danger" id="ocr-stop">停止</button>
+      <div class="grow"></div>
+      <button class="ghost-btn" id="ocr-cancel">取消</button>
+      <button class="primary-btn" id="ocr-start">开始识别</button>
+      <button class="primary-btn hidden" id="ocr-use">用识别结果导入</button>
+    </div>
   </div>
 </div>
 
 <div class="toast" id="toast" hidden></div>
 
+<script>window.__NR_ASSETS = { base: 'vendor/' };</script>
 <script type="module" src="src/app.js"></script>
 </body>
 </html>

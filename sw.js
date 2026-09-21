@@ -1,5 +1,5 @@
 /* 清风阅读 Service Worker：应用外壳离线可用；书籍本身存在 IndexedDB，本来就是离线的 */
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `qingfeng-reader-${VERSION}`;
 const SHELL = [
   './',
@@ -22,6 +22,9 @@ const SHELL = [
   './vendor/jszip/jszip.min.js',
   './vendor/pdfjs/pdf.min.js',
   './vendor/pdfjs/pdf.worker.min.js',
+  './vendor/tesseract/tesseract.min.js',
+  './vendor/tesseract/worker.min.js',
+  './src/formats/ocr.js',
 ];
 
 self.addEventListener('install', (event) => {
@@ -43,11 +46,16 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// OCR 的 wasm 内核和语言包体积很大（合计约 5MB），不进 SW 缓存，
+// 交给浏览器自身的 HTTP 缓存，避免装一次应用就占掉几 MB 配额。
+const SKIP_CACHE = /\/vendor\/tesseract\/(tesseract-core|lang\/)/;
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (SKIP_CACHE.test(url.pathname)) return;
 
   // 页面导航：优先网络，断网时回落到缓存的首页
   if (request.mode === 'navigate') {
