@@ -356,6 +356,13 @@ export async function parsePdf(buffer) {
     m = re.exec(raw);
   }
 
+  const streamLength = (body) => {
+    const value = dictValue(body, 'Length');
+    const ref = refNum(value);
+    if (ref != null && bodies.has(ref)) return Number((bodies.get(ref).match(/-?\d+/) || [])[0]);
+    return Number(value);
+  };
+
   // 展开对象流：里面的对象没有 "N 0 obj" 头
   for (const [num, body] of [...bodies]) {
     if (!/\/Type\s*\/ObjStm/.test(body)) continue;
@@ -373,13 +380,6 @@ export async function parsePdf(buffer) {
       if (!bodies.has(objNum)) bodies.set(objNum, text.slice(first + objOff, first + nextOff));
     }
   }
-
-  const streamLength = (body) => {
-    const value = dictValue(body, 'Length');
-    const ref = refNum(value);
-    if (ref != null && bodies.has(ref)) return Number((bodies.get(ref).match(/-?\d+/) || [])[0]);
-    return Number(value);
-  };
 
   // 字体：编号 → {twoByte, toUnicode}
   const fontCache = new Map();
@@ -464,7 +464,10 @@ export async function parsePdf(buffer) {
     if (t && t.startsWith('(')) title = String.fromCharCode(...decodeLiteral(t.slice(1, -1)));
   }
   if (!text.replace(/\s/g, '')) {
-    throw new Error('这个 PDF 里没有可提取的文字（可能是扫描图片版，需要 OCR）');
+    const encrypted = /\/Encrypt\s/.test(raw);
+    throw new Error(encrypted
+      ? '这个 PDF 设了加密保护，浏览器里读不到里面的文字；可以先用别的工具解除加密或导出成 TXT / EPUB 再导入'
+      : '这个 PDF 里没有可提取的文字（多半是扫描图片版，需要先 OCR 转成文字）');
   }
   return { title, pages: cleanedPages, text };
 }

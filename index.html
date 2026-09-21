@@ -182,6 +182,7 @@
     <div class="field">
       <button class="ghost-btn danger" id="btn-reset-settings">恢复默认设置</button>
     </div>
+    <div class="muted small" id="app-version"></div>
     <div class="shortcuts">
       <strong>快捷键</strong>
       <ul>
@@ -359,6 +360,20 @@
       <button class="ghost-btn" id="batch-cancel">停止</button>
       <button class="primary-btn hidden" id="batch-done">完成</button>
     </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="error-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong id="error-title">导入失败</strong>
+      <button class="icon-btn" id="error-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <p id="error-file" class="muted small"></p>
+      <p id="error-msg"></p>
+      <ul class="muted small" id="error-tips"></ul>
+    </div>
+    <div class="modal-foot"><div class="grow"></div>
+      <button class="primary-btn" id="error-ok">知道了</button></div>
   </div>
 </div>
 

@@ -497,6 +497,7 @@ kbd {
     <div class="field">
       <button class="ghost-btn danger" id="btn-reset-settings">恢复默认设置</button>
     </div>
+    <div class="muted small" id="app-version"></div>
     <div class="shortcuts">
       <strong>快捷键</strong>
       <ul>
@@ -674,6 +675,20 @@ kbd {
       <button class="ghost-btn" id="batch-cancel">停止</button>
       <button class="primary-btn hidden" id="batch-done">完成</button>
     </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="error-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong id="error-title">导入失败</strong>
+      <button class="icon-btn" id="error-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <p id="error-file" class="muted small"></p>
+      <p id="error-msg"></p>
+      <ul class="muted small" id="error-tips"></ul>
+    </div>
+    <div class="modal-foot"><div class="grow"></div>
+      <button class="primary-btn" id="error-ok">知道了</button></div>
   </div>
 </div>
 
@@ -1650,9 +1665,22 @@ function htmlToText(html) {
     .trim();
 }
 
+/** 生成"允许命名空间前缀"的标签正则，例如 <item> 与 <opf:item> 都能匹配 */
+function tagRe(name, extra = '', flags = 'i') {
+  return new RegExp(`<(?:[A-Za-z0-9_-]+:)?${name}\\b${extra}`, flags);
+}
+
 function attr(tag, name) {
   const m = tag.match(new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`, 'i'));
   return m ? m[1] : '';
+}
+
+/** 正文文档：优先看 media-type，缺失时看扩展名 */
+function isDocItem(item) {
+  if (!item) return false;
+  if (/xhtml|html/i.test(item.type || '')) return true;
+  if (item.type) return false;
+  return /\.(x?html?|htm)$/i.test(item.href || '');
 }
 
 function resolvePath(base, href) {
@@ -1680,7 +1708,12 @@ function parseToc(tocText, tocPath, isNcx) {
   const map = new Map();
   if (!tocText) return map;
   if (isNcx) {
-    const re = /<navPoint\b[\s\S]*?<text>([\s\S]*?)<\/text>[\s\S]*?<content\b[^>]*src\s*=\s*["']([^"']+)["']/gi;
+    const re = new RegExp(
+      '<(?:[A-Za-z0-9_-]+:)?navPoint\\b[\\s\\S]*?'
+      + '<(?:[A-Za-z0-9_-]+:)?text[^>]*>([\\s\\S]*?)</(?:[A-Za-z0-9_-]+:)?text>[\\s\\S]*?'
+      + '<(?:[A-Za-z0-9_-]+:)?content\\b[^>]*src\\s*=\\s*["\']([^"\']+)["\']',
+      'gi',
+    );
     let m = re.exec(tocText);
     while (m) {
       const label = htmlToText(m[1]).trim();
@@ -1689,7 +1722,7 @@ function parseToc(tocText, tocPath, isNcx) {
       m = re.exec(tocText);
     }
   } else {
-    const re = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    const re = new RegExp('<(?:[A-Za-z0-9_-]+:)?a\\b[^>]*href\\s*=\\s*["\']([^"\']+)["\'][^>]*>([\\s\\S]*?)</(?:[A-Za-z0-9_-]+:)?a>', 'gi');
     let m = re.exec(tocText);
     while (m) {
       const path = resolvePath(base, m[1]);
@@ -1708,7 +1741,8 @@ function parseToc(tocText, tocPath, isNcx) {
 async function parseEpub(buffer) {
   const zip = await readZip(buffer);
   const container = await readZipText(zip, 'META-INF/container.xml');
-  let opfPath = container ? attr(container.match(/<rootfile\b[^>]*>/i)?.[0] || '', 'full-path') : '';
+  const rootfileRe = tagRe('rootfile', '[^>]*>');
+  let opfPath = container ? attr((container.match(rootfileRe) || [''])[0], 'full-path') : '';
   if (!opfPath) {
     opfPath = [...zip.keys()].find((n) => n.toLowerCase().endsWith('.opf')) || '';
   }
@@ -1717,12 +1751,16 @@ async function parseEpub(buffer) {
   const opf = await readZipText(zip, opfPath);
   const base = opfPath.includes('/') ? opfPath.replace(/[^/]+$/, '') : '';
 
-  const title = decodeEntities((opf.match(/<dc:title[^>]*>([\s\S]*?)<\/dc:title>/i) || [])[1] || '').trim();
-  const author = decodeEntities((opf.match(/<dc:creator[^>]*>([\s\S]*?)<\/dc:creator>/i) || [])[1] || '').trim();
+  const metaText = (name) => {
+    const re = new RegExp(`<(?:[A-Za-z0-9_-]+:)?${name}[^>]*>([\\s\\S]*?)</(?:[A-Za-z0-9_-]+:)?${name}>`, 'i');
+    return decodeEntities((opf.match(re) || [])[1] || '').trim();
+  };
+  const title = metaText('title');
+  const author = metaText('creator');
 
   // manifest
   const manifest = new Map();
-  const itemRe = /<item\b[^>]*\/?>/gi;
+  const itemRe = tagRe('item', '[^>]*/?>', 'gi');
   let im = itemRe.exec(opf);
   while (im) {
     const tag = im[0];
@@ -1746,17 +1784,15 @@ async function parseEpub(buffer) {
 
   // spine 顺序
   const spine = [];
-  const refRe = /<itemref\b[^>]*>/gi;
+  const refRe = tagRe('itemref', '[^>]*>', 'gi');
   let rm = refRe.exec(opf);
   while (rm) {
     const idref = attr(rm[0], 'idref');
     const item = manifest.get(idref);
-    if (item && /xhtml|html/i.test(item.type || '')) spine.push(item);
+    if (item && isDocItem(item)) spine.push(item);
     rm = refRe.exec(opf);
   }
-  const docs = spine.length
-    ? spine
-    : [...manifest.values()].filter((i) => /xhtml|html/i.test(i.type || ''));
+  const docs = spine.length ? spine : [...manifest.values()].filter(isDocItem);
 
   const chapters = [];
   for (const doc of docs) {
@@ -2136,6 +2172,13 @@ async function parsePdf(buffer) {
     m = re.exec(raw);
   }
 
+  const streamLength = (body) => {
+    const value = dictValue(body, 'Length');
+    const ref = refNum(value);
+    if (ref != null && bodies.has(ref)) return Number((bodies.get(ref).match(/-?\d+/) || [])[0]);
+    return Number(value);
+  };
+
   // 展开对象流：里面的对象没有 "N 0 obj" 头
   for (const [num, body] of [...bodies]) {
     if (!/\/Type\s*\/ObjStm/.test(body)) continue;
@@ -2153,13 +2196,6 @@ async function parsePdf(buffer) {
       if (!bodies.has(objNum)) bodies.set(objNum, text.slice(first + objOff, first + nextOff));
     }
   }
-
-  const streamLength = (body) => {
-    const value = dictValue(body, 'Length');
-    const ref = refNum(value);
-    if (ref != null && bodies.has(ref)) return Number((bodies.get(ref).match(/-?\d+/) || [])[0]);
-    return Number(value);
-  };
 
   // 字体：编号 → {twoByte, toUnicode}
   const fontCache = new Map();
@@ -2244,7 +2280,10 @@ async function parsePdf(buffer) {
     if (t && t.startsWith('(')) title = String.fromCharCode(...decodeLiteral(t.slice(1, -1)));
   }
   if (!text.replace(/\s/g, '')) {
-    throw new Error('这个 PDF 里没有可提取的文字（可能是扫描图片版，需要 OCR）');
+    const encrypted = /\/Encrypt\s/.test(raw);
+    throw new Error(encrypted
+      ? '这个 PDF 设了加密保护，浏览器里读不到里面的文字；可以先用别的工具解除加密或导出成 TXT / EPUB 再导入'
+      : '这个 PDF 里没有可提取的文字（多半是扫描图片版，需要先 OCR 转成文字）');
   }
   return { title, pages: cleanedPages, text };
 }
@@ -2424,6 +2463,7 @@ function saveSettings(settings) {
 
 
 
+const APP_VERSION = '1.3.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -2480,6 +2520,7 @@ function applySettings() {
     .forEach((k) => { $(`set-${k}`).value = s[k]; });
   $('set-fontFamily').value = s.fontFamily;
   $('shelf-sort').value = s.shelfSort || 'recent';
+  $('app-version').textContent = `版本 ${APP_VERSION} · 支持 TXT / EPUB / PDF`;
   [...$('theme-row').children].forEach((b) => b.classList.toggle('active', b.dataset.themeValue === s.theme));
   [...$('mode-row').children].forEach((b) => b.classList.toggle('active', b.dataset.modeValue === (s.readingMode || 'scroll')));
   saveSettings(s);
@@ -2547,6 +2588,34 @@ function closePanels() {
   $('overlay').classList.add('hidden');
 }
 function showModal(id) { $(id).classList.remove('hidden'); }
+
+/** 导入失败时给出看得懂的原因和下一步建议 */
+function showError(fileName, message, tips = []) {
+  $('error-file').textContent = fileName ? `文件：${fileName}` : '';
+  $('error-msg').textContent = message;
+  const list = $('error-tips');
+  list.innerHTML = '';
+  for (const tip of tips) list.appendChild(el('li', null, tip));
+  showModal('error-modal');
+}
+
+function importTips(fileName) {
+  const lower = (fileName || '').toLowerCase();
+  if (lower.endsWith('.pdf')) {
+    return [
+      '扫描版 PDF（整页是图片）里没有文字，需要先用 OCR 转成文字版',
+      '加了密码/权限保护的 PDF 需要先解除保护',
+      '也可以把 PDF 另存 / 转换成 TXT 或 EPUB 再导入',
+    ];
+  }
+  if (lower.endsWith('.epub')) {
+    return [
+      '带 DRM 的 EPUB（从商店买的）无法直接打开，需要先去掉 DRM',
+      '可以用别的工具把它转换成 TXT 再导入',
+    ];
+  }
+  return ['可以试试换一种编码，或者把文件另存为 UTF-8 的 TXT 再导入'];
+}
 function hideModal(id) { $(id).classList.add('hidden'); }
 
 /* =========================================================
@@ -2916,8 +2985,10 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
     kind: encodingInfo.kind || 'txt',
   };
   $('source-field').hidden = !state.pending.native;
+  // 有的 EPUB 整本只有一个 xhtml，自带"目录"只有一条，这时默认按规则重新分章
+  const nativeUsable = !!(state.pending.native && state.pending.native.length > 1);
   $('opt-source').value = state.pending.native
-    ? ((existing && existing.chapterSource) || 'native')
+    ? ((existing && existing.chapterSource) || (nativeUsable ? 'native' : 'rules'))
     : 'rules';
   $('import-title').textContent = existing ? '重新排版 / 重新分章' : '导入并排版';
   $('import-confirm').textContent = existing ? '保存并重新阅读' : '导入并开始阅读';
@@ -3104,11 +3175,14 @@ async function handleFiles(files, opts = {}) {
   if (list.length === 1 && !opts.batch) {
     try {
       const info = await readBookFile(list[0]);
-      if (!info.raw || !info.raw.replace(/\s/g, '')) { toast(`${list[0].name} 里没有可读的文字`); return; }
+      if (!info.raw || !info.raw.replace(/\s/g, '')) {
+        showError(list[0].name, '这个文件里没有解析出可读的文字。', importTips(list[0].name));
+        return;
+      }
       info.category = categoryFromPath(list[0]);
       openImportModal(info.raw, info.name, info, null, info.native);
     } catch (err) {
-      toast(`读取 ${list[0].name} 失败：${err.message}`);
+      showError(list[0].name, `读取失败：${err.message}`, importTips(list[0].name));
     }
     return;
   }
@@ -3944,6 +4018,8 @@ function bindEvents() {
     hideSelPop();
     addBookmark(text);
   });
+  $('error-ok').addEventListener('click', () => hideModal('error-modal'));
+  $('error-close').addEventListener('click', () => hideModal('error-modal'));
   $('note-save').addEventListener('click', saveNoteFromModal);
   $('note-cancel').addEventListener('click', () => hideModal('note-modal'));
   $('note-close').addEventListener('click', () => hideModal('note-modal'));
@@ -4026,7 +4102,7 @@ function bindEvents() {
     }
     if (e.key === 'Escape') {
       closePanels(); hideSelPop();
-      hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal');
+      hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal'); hideModal('error-modal');
       return;
     }
     if (!state.book) return;

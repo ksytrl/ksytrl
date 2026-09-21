@@ -196,6 +196,16 @@ group('EPUB 解析');
   check('正文不重复标题', !epub.chapters[0].content.startsWith('第一章'), JSON.stringify(epub.chapters[0].content.slice(0, 20)));
   check('书名清洗后干净', cleanBookTitle(epub.title) === '夜行记', cleanBookTitle(epub.title));
   check('HTML 转文本', htmlToText('<p>甲</p><p>乙&amp;丙</p>') === '甲\n乙&丙', JSON.stringify(htmlToText('<p>甲</p><p>乙&amp;丙</p>')));
+
+  // 真实电子书里的常见变体
+  const ns = await parseEpub(await readBuffer('../samples/sample-namespaced.epub'));
+  check('带命名空间前缀的 EPUB（<opf:item> / <ncx:navPoint>）', ns.chapters.length === 3 && ns.title === '命名空间测试', JSON.stringify({ n: ns.chapters.length, t: ns.title }));
+  const epub3 = await parseEpub(await readBuffer('../samples/sample-epub3.epub'));
+  check('EPUB3 的 nav 目录 + 带 %20 的路径', epub3.chapters.length === 3 && epub3.chapters[1].title === '第二章 刀光', JSON.stringify(epub3.chapters.map((c) => c.title)));
+  const single = await parseEpub(await readBuffer('../samples/sample-single-doc.epub'));
+  check('整本只有一个 xhtml 时也能读到正文', single.chapters.length === 1 && single.chapters[0].content.includes('第三章 归途'), JSON.stringify(single.chapters.map((c) => c.content.length)));
+  const singleSplit = splitChapters(cleanText(single.text, {}, { ruleIds: ['cn-chapter'] }).text, { ruleIds: ['cn-chapter'] });
+  check('单文件 EPUB 可以按规则切出 3 章', singleSplit.chapters.length === 3, JSON.stringify(singleSplit.chapters.map((c) => c.title)));
 }
 
 /* ---------- PDF ---------- */
@@ -212,6 +222,10 @@ group('PDF 解析');
   check('去掉重复页眉', !withHeads.text.includes('精校版'), JSON.stringify(withHeads.text.slice(0, 60)));
   check('去掉孤立页码行', !withHeads.text.split('\n').some((l) => /^\s*\d{1,3}\s*$/.test(l)), '');
   check('正文没被误删', withHeads.text.includes('用来验证提取效果'), '');
+  // 现代 PDF 普遍把对象压进"对象流"，这条以前会直接抛错
+  const objstm = await parsePdf(await readBuffer('../samples/sample-objstm.pdf'));
+  check('对象流(ObjStm) + 交叉引用流的 PDF', objstm.text.includes('Chapter One') && objstm.text.includes('object stream'), JSON.stringify(objstm.text.slice(0, 60)));
+
   const heads = stripRunningHeads(['书名\n正文甲\n1', '书名\n正文乙\n2', '书名\n正文丙\n3', '书名\n正文丁\n4']);
   check('stripRunningHeads 直接调用', heads.join('|') === '正文甲|正文乙|正文丙|正文丁', JSON.stringify(heads));
 }

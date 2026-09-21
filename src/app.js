@@ -15,6 +15,7 @@ import {
   loadSettings, saveSettings, DEFAULT_SETTINGS,
 } from './store.js';
 
+const APP_VERSION = '1.3.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -71,6 +72,7 @@ function applySettings() {
     .forEach((k) => { $(`set-${k}`).value = s[k]; });
   $('set-fontFamily').value = s.fontFamily;
   $('shelf-sort').value = s.shelfSort || 'recent';
+  $('app-version').textContent = `版本 ${APP_VERSION} · 支持 TXT / EPUB / PDF`;
   [...$('theme-row').children].forEach((b) => b.classList.toggle('active', b.dataset.themeValue === s.theme));
   [...$('mode-row').children].forEach((b) => b.classList.toggle('active', b.dataset.modeValue === (s.readingMode || 'scroll')));
   saveSettings(s);
@@ -138,6 +140,34 @@ function closePanels() {
   $('overlay').classList.add('hidden');
 }
 function showModal(id) { $(id).classList.remove('hidden'); }
+
+/** 导入失败时给出看得懂的原因和下一步建议 */
+function showError(fileName, message, tips = []) {
+  $('error-file').textContent = fileName ? `文件：${fileName}` : '';
+  $('error-msg').textContent = message;
+  const list = $('error-tips');
+  list.innerHTML = '';
+  for (const tip of tips) list.appendChild(el('li', null, tip));
+  showModal('error-modal');
+}
+
+function importTips(fileName) {
+  const lower = (fileName || '').toLowerCase();
+  if (lower.endsWith('.pdf')) {
+    return [
+      '扫描版 PDF（整页是图片）里没有文字，需要先用 OCR 转成文字版',
+      '加了密码/权限保护的 PDF 需要先解除保护',
+      '也可以把 PDF 另存 / 转换成 TXT 或 EPUB 再导入',
+    ];
+  }
+  if (lower.endsWith('.epub')) {
+    return [
+      '带 DRM 的 EPUB（从商店买的）无法直接打开，需要先去掉 DRM',
+      '可以用别的工具把它转换成 TXT 再导入',
+    ];
+  }
+  return ['可以试试换一种编码，或者把文件另存为 UTF-8 的 TXT 再导入'];
+}
 function hideModal(id) { $(id).classList.add('hidden'); }
 
 /* =========================================================
@@ -507,8 +537,10 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
     kind: encodingInfo.kind || 'txt',
   };
   $('source-field').hidden = !state.pending.native;
+  // 有的 EPUB 整本只有一个 xhtml，自带"目录"只有一条，这时默认按规则重新分章
+  const nativeUsable = !!(state.pending.native && state.pending.native.length > 1);
   $('opt-source').value = state.pending.native
-    ? ((existing && existing.chapterSource) || 'native')
+    ? ((existing && existing.chapterSource) || (nativeUsable ? 'native' : 'rules'))
     : 'rules';
   $('import-title').textContent = existing ? '重新排版 / 重新分章' : '导入并排版';
   $('import-confirm').textContent = existing ? '保存并重新阅读' : '导入并开始阅读';
@@ -695,11 +727,14 @@ async function handleFiles(files, opts = {}) {
   if (list.length === 1 && !opts.batch) {
     try {
       const info = await readBookFile(list[0]);
-      if (!info.raw || !info.raw.replace(/\s/g, '')) { toast(`${list[0].name} 里没有可读的文字`); return; }
+      if (!info.raw || !info.raw.replace(/\s/g, '')) {
+        showError(list[0].name, '这个文件里没有解析出可读的文字。', importTips(list[0].name));
+        return;
+      }
       info.category = categoryFromPath(list[0]);
       openImportModal(info.raw, info.name, info, null, info.native);
     } catch (err) {
-      toast(`读取 ${list[0].name} 失败：${err.message}`);
+      showError(list[0].name, `读取失败：${err.message}`, importTips(list[0].name));
     }
     return;
   }
@@ -1535,6 +1570,8 @@ function bindEvents() {
     hideSelPop();
     addBookmark(text);
   });
+  $('error-ok').addEventListener('click', () => hideModal('error-modal'));
+  $('error-close').addEventListener('click', () => hideModal('error-modal'));
   $('note-save').addEventListener('click', saveNoteFromModal);
   $('note-cancel').addEventListener('click', () => hideModal('note-modal'));
   $('note-close').addEventListener('click', () => hideModal('note-modal'));
@@ -1617,7 +1654,7 @@ function bindEvents() {
     }
     if (e.key === 'Escape') {
       closePanels(); hideSelPop();
-      hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal');
+      hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal'); hideModal('error-modal');
       return;
     }
     if (!state.book) return;

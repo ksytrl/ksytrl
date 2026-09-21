@@ -35,9 +35,22 @@ export function htmlToText(html) {
     .trim();
 }
 
+/** 生成"允许命名空间前缀"的标签正则，例如 <item> 与 <opf:item> 都能匹配 */
+function tagRe(name, extra = '', flags = 'i') {
+  return new RegExp(`<(?:[A-Za-z0-9_-]+:)?${name}\\b${extra}`, flags);
+}
+
 function attr(tag, name) {
   const m = tag.match(new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`, 'i'));
   return m ? m[1] : '';
+}
+
+/** 正文文档：优先看 media-type，缺失时看扩展名 */
+function isDocItem(item) {
+  if (!item) return false;
+  if (/xhtml|html/i.test(item.type || '')) return true;
+  if (item.type) return false;
+  return /\.(x?html?|htm)$/i.test(item.href || '');
 }
 
 function resolvePath(base, href) {
@@ -65,7 +78,12 @@ function parseToc(tocText, tocPath, isNcx) {
   const map = new Map();
   if (!tocText) return map;
   if (isNcx) {
-    const re = /<navPoint\b[\s\S]*?<text>([\s\S]*?)<\/text>[\s\S]*?<content\b[^>]*src\s*=\s*["']([^"']+)["']/gi;
+    const re = new RegExp(
+      '<(?:[A-Za-z0-9_-]+:)?navPoint\\b[\\s\\S]*?'
+      + '<(?:[A-Za-z0-9_-]+:)?text[^>]*>([\\s\\S]*?)</(?:[A-Za-z0-9_-]+:)?text>[\\s\\S]*?'
+      + '<(?:[A-Za-z0-9_-]+:)?content\\b[^>]*src\\s*=\\s*["\']([^"\']+)["\']',
+      'gi',
+    );
     let m = re.exec(tocText);
     while (m) {
       const label = htmlToText(m[1]).trim();
@@ -74,7 +92,7 @@ function parseToc(tocText, tocPath, isNcx) {
       m = re.exec(tocText);
     }
   } else {
-    const re = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    const re = new RegExp('<(?:[A-Za-z0-9_-]+:)?a\\b[^>]*href\\s*=\\s*["\']([^"\']+)["\'][^>]*>([\\s\\S]*?)</(?:[A-Za-z0-9_-]+:)?a>', 'gi');
     let m = re.exec(tocText);
     while (m) {
       const path = resolvePath(base, m[1]);
@@ -93,7 +111,8 @@ function parseToc(tocText, tocPath, isNcx) {
 export async function parseEpub(buffer) {
   const zip = await readZip(buffer);
   const container = await readZipText(zip, 'META-INF/container.xml');
-  let opfPath = container ? attr(container.match(/<rootfile\b[^>]*>/i)?.[0] || '', 'full-path') : '';
+  const rootfileRe = tagRe('rootfile', '[^>]*>');
+  let opfPath = container ? attr((container.match(rootfileRe) || [''])[0], 'full-path') : '';
   if (!opfPath) {
     opfPath = [...zip.keys()].find((n) => n.toLowerCase().endsWith('.opf')) || '';
   }
@@ -102,12 +121,16 @@ export async function parseEpub(buffer) {
   const opf = await readZipText(zip, opfPath);
   const base = opfPath.includes('/') ? opfPath.replace(/[^/]+$/, '') : '';
 
-  const title = decodeEntities((opf.match(/<dc:title[^>]*>([\s\S]*?)<\/dc:title>/i) || [])[1] || '').trim();
-  const author = decodeEntities((opf.match(/<dc:creator[^>]*>([\s\S]*?)<\/dc:creator>/i) || [])[1] || '').trim();
+  const metaText = (name) => {
+    const re = new RegExp(`<(?:[A-Za-z0-9_-]+:)?${name}[^>]*>([\\s\\S]*?)</(?:[A-Za-z0-9_-]+:)?${name}>`, 'i');
+    return decodeEntities((opf.match(re) || [])[1] || '').trim();
+  };
+  const title = metaText('title');
+  const author = metaText('creator');
 
   // manifest
   const manifest = new Map();
-  const itemRe = /<item\b[^>]*\/?>/gi;
+  const itemRe = tagRe('item', '[^>]*/?>', 'gi');
   let im = itemRe.exec(opf);
   while (im) {
     const tag = im[0];
@@ -131,17 +154,15 @@ export async function parseEpub(buffer) {
 
   // spine 顺序
   const spine = [];
-  const refRe = /<itemref\b[^>]*>/gi;
+  const refRe = tagRe('itemref', '[^>]*>', 'gi');
   let rm = refRe.exec(opf);
   while (rm) {
     const idref = attr(rm[0], 'idref');
     const item = manifest.get(idref);
-    if (item && /xhtml|html/i.test(item.type || '')) spine.push(item);
+    if (item && isDocItem(item)) spine.push(item);
     rm = refRe.exec(opf);
   }
-  const docs = spine.length
-    ? spine
-    : [...manifest.values()].filter((i) => /xhtml|html/i.test(i.type || ''));
+  const docs = spine.length ? spine : [...manifest.values()].filter(isDocItem);
 
   const chapters = [];
   for (const doc of docs) {
