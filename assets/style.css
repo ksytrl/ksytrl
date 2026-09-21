@@ -346,3 +346,25 @@ kbd {
 /* ===== OCR ===== */
 #ocr-modal .book-progress { height: 6px; margin: 14px 0 8px; }
 #ocr-preview { max-height: 170px; margin-top: 12px; }
+
+/* ===== 朗读 ===== */
+.tts-bar {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 40;
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+  box-shadow: var(--shadow); max-width: min(94vw, 720px);
+}
+.tts-bar select {
+  width: auto; max-width: 130px; padding: 5px 8px; border-radius: 8px; font-size: 12px;
+}
+.tts-info { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.tts-s.active {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  border-radius: 3px;
+}
+@media (max-width: 640px) {
+  .tts-bar { gap: 6px; padding: 6px 8px; }
+  .tts-bar select { max-width: 92px; }
+  .tts-info { display: none; }
+}

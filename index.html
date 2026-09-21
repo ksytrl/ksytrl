@@ -21,6 +21,7 @@
     <div class="topbar-actions">
       <button class="ghost-btn" id="btn-shelf" title="书架">书架</button>
       <button class="ghost-btn" id="btn-retypeset" title="重新排版 / 重新分章" hidden>重新排版</button>
+      <button class="ghost-btn" id="btn-tts" title="朗读 (P)" hidden>朗读</button>
       <button class="ghost-btn" id="btn-marks" title="书签与笔记 (B)" hidden>书签</button>
       <button class="ghost-btn" id="btn-export" title="导出清洗后的 TXT" hidden>导出</button>
       <button class="ghost-btn" id="btn-install" title="安装到桌面 / 主屏幕" hidden>安装</button>
@@ -79,6 +80,7 @@
         <div><h3>📚 多格式导入</h3><p>PDF / EPUB / TXT 分栏导入，各栏只认自己的类型；MOBI、AZW3、DOCX、HTML、Markdown、FB2、RTF 也能读。</p></div>
         <div><h3>⚡ 任意跳章</h3><p>目录点击、章节号直达、上一章/下一章、全文搜索定位，快捷键左右方向键翻章。</p></div>
         <div><h3>🌊 无缝滚动</h3><p>上下滚动自动接上下一章 / 上一章，也可切换成一章一页；进度与位置自动记忆。</p></div>
+        <div><h3>🔊 朗读听书</h3><p>用系统语音逐句朗读，读到哪句高亮哪句，一章读完自动接下一章，可调语速与音色。</p></div>
         <div><h3>🔖 书签与笔记</h3><p>任意位置加书签，选中正文写笔记并自动高亮，可按章节浏览、跳转与导出。</p></div>
         <div><h3>🗂️ 书架分组</h3><p>按分类分组与搜索；导入文件夹时自动按子目录名建立分类。</p></div>
         <div><h3>📲 可安装 (PWA)</h3><p>可装到桌面或手机主屏，断网也能打开继续读。</p></div>
@@ -111,6 +113,16 @@
       </nav>
     </section>
   </main>
+
+  <div class="tts-bar hidden" id="tts-bar">
+    <button class="icon-btn" id="tts-toggle" title="播放 / 暂停">▶</button>
+    <button class="icon-btn" id="tts-prev" title="上一句">⏮</button>
+    <button class="icon-btn" id="tts-next" title="下一句">⏭</button>
+    <span class="tts-info" id="tts-info">朗读</span>
+    <select id="tts-voice" title="音色"></select>
+    <select id="tts-rate" title="语速"></select>
+    <button class="icon-btn" id="tts-close" title="关闭朗读">✕</button>
+  </div>
 
   <div class="progressbar"><div class="progressbar-inner" id="progressbar"></div></div>
 </div>
@@ -203,7 +215,7 @@
       <ul>
         <li><kbd>←</kbd> / <kbd>→</kbd> 上一章 / 下一章</li>
         <li><kbd>T</kbd> 目录　<kbd>S</kbd> 设置　<kbd>G</kbd> 跳章</li>
-        <li><kbd>B</kbd> 书签与笔记　<kbd>D</kbd> 在当前位置加书签</li>
+        <li><kbd>B</kbd> 书签与笔记　<kbd>D</kbd> 加书签　<kbd>P</kbd> 朗读 / 暂停</li>
         <li>无缝滚动模式下，上下滚动会自动接上相邻章节</li>
         <li><kbd>+</kbd> / <kbd>-</kbd> 字号　<kbd>Esc</kbd> 关闭面板</li>
       </ul>

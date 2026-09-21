@@ -21,6 +21,7 @@ const MODULES = [
   'src/formats/pdf.js',
   'src/formats/readers.js',
   'src/formats/ocr.js',
+  'src/tts.js',
   'src/store.js',
   'src/app.js',
 ];

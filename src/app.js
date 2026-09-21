@@ -9,6 +9,9 @@ import {
 } from './formats/readers.js';
 import { ocrPdf, OCR_LANGS, OCR_SCALES } from './formats/ocr.js';
 import {
+  splitSentences, supportsTts, listVoices, whenVoicesReady, createSpeaker, TTS_RATES,
+} from './tts.js';
+import {
   CHAPTER_RULES, DEFAULT_SPLIT_OPTIONS, splitChapters, analyzeRules, suggestRuleIds,
 } from './chapters.js';
 import {
@@ -17,7 +20,7 @@ import {
   loadSettings, saveSettings, DEFAULT_SETTINGS,
 } from './store.js';
 
-const APP_VERSION = '1.6.0';   // 显示在阅读设置里，方便确认用的是哪一版
+const APP_VERSION = '1.7.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -47,6 +50,7 @@ const state = {
   markCounts: new Map(),
   editingMark: null,
   ocr: null,
+  tts: null,          // 朗读状态：{ speaker, chapterIndex, sentences }
   nativeChapters: null,// 电子书自带目录
   batchAbort: false,
   importFormat: 'txt',   // 当前导入分栏：pdf / epub / txt / other
@@ -362,6 +366,7 @@ function renderShelf() {
 
 function showShelf() {
   stopAutoScroll();
+  stopTts();
   state.book = null;
   state.marks = [];
   $('view-shelf').classList.remove('hidden');
@@ -369,6 +374,7 @@ function showShelf() {
   $('btn-retypeset').hidden = true;
   $('btn-export').hidden = true;
   $('btn-marks').hidden = true;
+  $('btn-tts').hidden = true;
   $('top-book').textContent = '清风阅读';
   $('top-chapter').textContent = '本地小说阅读器 · PDF / EPUB / TXT / MOBI …';
   $('progressbar').style.width = '0';
@@ -931,6 +937,7 @@ async function openBook(id) {
   $('btn-retypeset').hidden = false;
   $('btn-export').hidden = false;
   $('btn-marks').hidden = false;
+  $('btn-tts').hidden = false;
   $('top-book').textContent = meta.title;
   await loadMarks();
   renderMarks();
@@ -954,8 +961,30 @@ function isScrollMode() {
 }
 
 /** 把一章正文转成段落 HTML */
+function ttsActiveFor(index) {
+  return !!(state.tts && state.tts.chapterIndex === index);
+}
+
 function chapterInnerHtml(index) {
   const text = state.chapterTexts[index] || '';
+  // 朗读当前章时，按句子拆成 span，方便读到哪句高亮哪句
+  if (ttsActiveFor(index)) {
+    let counter = 0;
+    const html = text.split('\n').map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return '<p class="blank"></p>';
+      const indent = (line.match(/^[\s　]*/) || [''])[0];
+      const inner = splitSentences(trimmed)
+        .map((sentence) => {
+          const span = `<span class="tts-s" data-s="${counter}">${escapeHtml(sentence)}</span>`;
+          counter += 1;
+          return span;
+        })
+        .join('');
+      return `<p>${escapeHtml(indent)}${inner}</p>`;
+    }).join('');
+    return html || '<p class="muted">（本章没有正文）</p>';
+  }
   const noteSegments = state.highlight ? [] : noteSegmentsFor(index);
   const html = text.split('\n').map((line) => {
     const t = line.trim();
@@ -1178,6 +1207,9 @@ function goChapter(index, opts = {}) {
   state.highlight = opts.highlight || '';
   hideResumeHint();
   renderReader(index, 0);
+  if (state.tts && state.tts.chapterIndex !== index && !opts.fromTts) {
+    loadTtsChapter(index, state.tts.speaker.playing);
+  }
   if (opts.closePanel !== false) closePanels();
 }
 
@@ -1655,6 +1687,21 @@ function bindEvents() {
     hideSelPop();
     addBookmark(text);
   });
+  $('btn-tts').addEventListener('click', toggleTts);
+  $('tts-toggle').addEventListener('click', toggleTts);
+  $('tts-prev').addEventListener('click', () => { if (state.tts) state.tts.speaker.jump(-1); updateTtsBar(); });
+  $('tts-next').addEventListener('click', () => { if (state.tts) state.tts.speaker.jump(1); updateTtsBar(); });
+  $('tts-close').addEventListener('click', stopTts);
+  $('tts-rate').addEventListener('change', (e) => {
+    state.settings.ttsRate = Number(e.target.value) || 1;
+    saveSettings(state.settings);
+    if (state.tts) state.tts.speaker.setRate(state.settings.ttsRate);
+  });
+  $('tts-voice').addEventListener('change', (e) => {
+    state.settings.ttsVoice = e.target.value;
+    saveSettings(state.settings);
+    if (state.tts) state.tts.speaker.setVoice(currentVoice());
+  });
   $('ocr-start').addEventListener('click', runOcr);
   $('ocr-stop').addEventListener('click', () => {
     if (state.ocr) state.ocr.stop = true;
@@ -1769,6 +1816,7 @@ function bindEvents() {
       case 'ArrowRight': goChapter(state.chapterIndex + 1, { closePanel: false }); break;
       case 't': case 'T': $('btn-toc').click(); break;
       case 'b': case 'B': $('btn-marks').click(); break;
+      case 'p': case 'P': toggleTts(); break;
       case 'd': case 'D': addBookmark(); break;
       case 's': case 'S': openPanel('settings-panel'); break;
       case 'g': case 'G':
@@ -1788,6 +1836,155 @@ function bindEvents() {
 /* =========================================================
  * 启动
  * =======================================================*/
+/* =========================================================
+ * 朗读（听书）
+ * =======================================================*/
+function fillTtsControls() {
+  const rateSelect = $('tts-rate');
+  if (!rateSelect.options.length) {
+    for (const rate of TTS_RATES) {
+      const opt = document.createElement('option');
+      opt.value = String(rate);
+      opt.textContent = `${rate}x`;
+      rateSelect.appendChild(opt);
+    }
+  }
+  rateSelect.value = String(state.settings.ttsRate || 1);
+}
+
+async function fillTtsVoices() {
+  const select = $('tts-voice');
+  const voices = await whenVoicesReady();
+  select.innerHTML = '';
+  if (!voices.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '系统默认';
+    select.appendChild(opt);
+    return voices;
+  }
+  for (const voice of voices) {
+    const opt = document.createElement('option');
+    opt.value = voice.name;
+    opt.textContent = `${voice.name}（${voice.lang}）`;
+    select.appendChild(opt);
+  }
+  const saved = state.settings.ttsVoice;
+  if (saved && voices.some((v) => v.name === saved)) select.value = saved;
+  return voices;
+}
+
+function currentVoice() {
+  const name = $('tts-voice').value;
+  return listVoices().find((v) => v.name === name) || null;
+}
+
+function highlightSentence(index) {
+  document.querySelectorAll('.tts-s.active').forEach((n) => n.classList.remove('active'));
+  const node = document.querySelector(`.tts-s[data-s="${index}"]`);
+  if (!node) return;
+  node.classList.add('active');
+  const rect = node.getBoundingClientRect();
+  if (rect.top < 120 || rect.bottom > window.innerHeight - 120) {
+    node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+}
+
+function updateTtsBar() {
+  if (!state.tts) return;
+  const { speaker } = state.tts;
+  $('tts-toggle').textContent = speaker.playing ? '⏸' : '▶';
+  $('tts-info').textContent = `第 ${state.tts.chapterIndex + 1} 章 · 第 ${Math.min(speaker.index + 1, speaker.total)} / ${speaker.total} 句`;
+}
+
+/** 找下一章有正文的（卷标题这类空章直接跳过） */
+function nextReadableChapter(from) {
+  for (let i = from; i < state.chapterTexts.length; i += 1) {
+    if (splitSentences(state.chapterTexts[i] || '').length) return i;
+  }
+  return -1;
+}
+
+function loadTtsChapter(index, autoplay = true) {
+  if (!state.tts) return;
+  let target = index;
+  let sentences = splitSentences(state.chapterTexts[target] || '');
+  if (!sentences.length && autoplay) {
+    // 卷标题之类没有正文，直接往后找一章能读的
+    const next = nextReadableChapter(target + 1);
+    if (next === -1) { toast('后面没有可朗读的正文了'); stopTts(); return; }
+    target = next;
+    sentences = splitSentences(state.chapterTexts[target] || '');
+    if (target !== state.chapterIndex) goChapter(target, { closePanel: false, fromTts: true });
+  }
+  state.tts.chapterIndex = target;
+  state.tts.speaker.load(sentences, 0);
+  refreshNoteHighlights();          // 重新渲染，带上句子 span
+  if (autoplay && sentences.length) state.tts.speaker.play(0);
+  else updateTtsBar();
+}
+
+async function startTts() {
+  if (!state.book) { toast('请先打开一本书'); return; }
+  if (!supportsTts()) {
+    showError('', '这个浏览器不支持朗读（缺少语音合成接口）。', [
+      '换用 Chrome / Edge / Safari 等主流浏览器',
+      '手机上通常需要系统里装有中文语音包',
+    ]);
+    return;
+  }
+  fillTtsControls();
+  const voices = await fillTtsVoices();
+  if (!voices.length) toast('系统里没找到语音包，会用浏览器默认音色');
+
+  if (!state.tts) {
+    const speaker = createSpeaker({
+      rate: state.settings.ttsRate || 1,
+      onSentence: ({ index }) => { highlightSentence(index); updateTtsBar(); },
+      onPause: () => updateTtsBar(),
+      onFinish: () => {
+        // 一章读完自动接下一章
+        const next = state.tts ? nextReadableChapter(state.tts.chapterIndex + 1) : -1;
+        if (next !== -1) {
+          goChapter(next, { closePanel: false, fromTts: true });
+          loadTtsChapter(next, true);
+          toast(`朗读：接着读第 ${next + 1} 章`);
+        } else {
+          toast('全书读完了');
+          stopTts();
+        }
+      },
+      onError: (err) => {
+        if (err === 'unsupported') return;
+        toast(`朗读出错：${err}`);
+        updateTtsBar();
+      },
+    });
+    state.tts = { speaker, chapterIndex: state.chapterIndex };
+    speaker.setVoice(currentVoice());
+  }
+  $('tts-bar').classList.remove('hidden');
+  loadTtsChapter(state.chapterIndex, true);
+}
+
+function stopTts() {
+  if (!state.tts) return;
+  state.tts.speaker.stop();
+  const index = state.tts.chapterIndex;
+  state.tts = null;
+  $('tts-bar').classList.add('hidden');
+  document.querySelectorAll('.tts-s.active').forEach((n) => n.classList.remove('active'));
+  if (state.book && index === state.chapterIndex) refreshNoteHighlights();
+}
+
+function toggleTts() {
+  if (!state.tts) { startTts(); return; }
+  const { speaker } = state.tts;
+  if (speaker.playing) speaker.pause();
+  else speaker.play(speaker.index);
+  updateTtsBar();
+}
+
 /* =========================================================
  * 扫描版 PDF 的 OCR
  * =======================================================*/

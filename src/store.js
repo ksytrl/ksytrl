@@ -233,6 +233,8 @@ export const DEFAULT_SETTINGS = {
   pageWidth: 720,
   fontFamily: 'serif',
   autoScrollSpeed: 40,
+  ttsRate: 1,
+  ttsVoice: '',
 };
 
 export function loadSettings() {

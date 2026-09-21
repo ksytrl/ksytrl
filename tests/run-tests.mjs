@@ -14,6 +14,7 @@ import {
   readDocx, readFb2, readHtml, readMarkdown, readRtf, readMobi, groupOf, FORMAT_GROUPS,
 } from '../src/formats/readers.js';
 import { parsePageRange, tidyOcrText, ocrPaths, OCR_LANGS } from '../src/formats/ocr.js';
+import { splitSentences, TTS_RATES } from '../src/tts.js';
 
 const readBuffer = async (path) => {
   const buf = await readFile(new URL(path, import.meta.url));
@@ -273,6 +274,18 @@ group('OCR（扫描版 PDF）');
     ocrPaths('chi_sim').langPath.startsWith('vendor/') && ocrPaths('eng').langPath.startsWith('https://'),
     JSON.stringify([ocrPaths('chi_sim').langPath, ocrPaths('eng').langPath]));
   check('提供了四种识别语言', OCR_LANGS.length === 4 && OCR_LANGS.some((l) => l.id === 'chi_sim+eng'), JSON.stringify(OCR_LANGS.map((l) => l.id)));
+}
+
+/* ---------- 朗读 ---------- */
+group('朗读（分句）');
+{
+  const text = '夜色沉沉，他抬头看了看天。远处传来一声闷响！\n「你不该来这里。」那人低声说道。\n没有标点的一行';
+  const sentences = splitSentences(text);
+  check('按句号感叹号断句', sentences[0] === '夜色沉沉，他抬头看了看天。' && sentences[1] === '远处传来一声闷响！', JSON.stringify(sentences.slice(0, 2)));
+  check('收尾引号算在同一句', sentences[2] === '「你不该来这里。」', JSON.stringify(sentences[2]));
+  check('没有标点的行也单独成句', sentences[sentences.length - 1] === '没有标点的一行', JSON.stringify(sentences));
+  check('空行不会产生空句子', splitSentences('甲。\n\n\n乙。').length === 2, JSON.stringify(splitSentences('甲。\n\n\n乙。')));
+  check('提供多档语速', TTS_RATES.includes(1) && TTS_RATES.length >= 6, JSON.stringify(TTS_RATES));
 }
 
 console.log(results.join('\n'));

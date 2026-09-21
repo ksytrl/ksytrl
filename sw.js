@@ -1,5 +1,5 @@
 /* 清风阅读 Service Worker：应用外壳离线可用；书籍本身存在 IndexedDB，本来就是离线的 */
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE = `qingfeng-reader-${VERSION}`;
 const SHELL = [
   './',
@@ -25,6 +25,7 @@ const SHELL = [
   './vendor/tesseract/tesseract.min.js',
   './vendor/tesseract/worker.min.js',
   './src/formats/ocr.js',
+  './src/tts.js',
 ];
 
 self.addEventListener('install', (event) => {
