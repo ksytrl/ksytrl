@@ -104,12 +104,28 @@ h1, h2, h3, h4 { margin: 0 0 .5em; font-weight: 650; }
 .hint { color: var(--text-dim); font-size: 13px; margin: 14px 0 0; }
 
 .shelf-head { display: flex; align-items: baseline; gap: 10px; margin: 34px 0 12px; }
-.book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
 .book-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 14px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px;
+  padding: 14px; box-shadow: var(--shadow); display: flex; gap: 14px;
   cursor: pointer; transition: transform .12s, border-color .12s;
 }
+.book-card .book-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.book-card .cover {
+  position: relative; width: 84px; height: 118px; flex: none; border-radius: 8px; overflow: hidden;
+  background: var(--surface-2); box-shadow: 0 2px 8px rgba(0,0,0,.18);
+}
+.book-card .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.book-card .cover-ops {
+  position: absolute; inset: auto 0 0 0; display: flex; gap: 4px; padding: 4px;
+  background: linear-gradient(transparent, rgba(0,0,0,.65)); opacity: 0; transition: opacity .15s;
+}
+.book-card:hover .cover-ops { opacity: 1; }
+.book-card .cover-ops button {
+  flex: 1; font-size: 11px; padding: 3px 0; border: 0; border-radius: 5px; cursor: pointer;
+  background: rgba(255,255,255,.9); color: #222;
+}
+.book-card .cover-ops button:hover { background: #fff; }
 .book-card:hover { transform: translateY(-2px); border-color: var(--accent); }
 .book-card h3 { font-size: 16px; margin: 0; font-family: var(--font-serif); line-height: 1.4; }
 .book-meta { font-size: 12px; color: var(--text-dim); line-height: 1.7; }
@@ -414,6 +430,7 @@ kbd {
         <div class="dropzone" id="dropzone">
           <input type="file" id="file-input" multiple hidden>
           <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
+          <input type="file" id="cover-input" accept="image/*" hidden>
           <div class="dropzone-inner">
             <div class="dropzone-icon" id="dz-icon">📖</div>
             <div class="dropzone-actions">
@@ -454,6 +471,7 @@ kbd {
         <div><h3>🌊 无缝滚动</h3><p>上下滚动自动接上下一章 / 上一章，也可切换成一章一页；进度与位置自动记忆。</p></div>
         <div><h3>🔊 朗读听书</h3><p>用系统语音逐句朗读，读到哪句高亮哪句，一章读完自动接下一章，可调语速与音色。</p></div>
         <div><h3>🔖 书签与笔记</h3><p>任意位置加书签，选中正文写笔记并自动高亮，可按章节浏览、跳转与导出。</p></div>
+        <div><h3>🖼️ 书架封面</h3><p>EPUB 取内封、PDF 取首页，其余按书名生成配色封面，也可以自己换图。</p></div>
         <div><h3>🗂️ 书架分组</h3><p>按分类分组与搜索；导入文件夹时自动按子目录名建立分类。</p></div>
         <div><h3>📲 可安装 (PWA)</h3><p>可装到桌面或手机主屏，断网也能打开继续读。</p></div>
         <div><h3>🌙 阅读体验</h3><p>四套主题、字号行距页宽字体自定义、自动滚动、导出排版后的干净 TXT。</p></div>
@@ -1736,6 +1754,137 @@ function escapeForRegExp(s) {
 }
 
 
+/* ===== src/cover.js ===== */
+/**
+ * 书架封面：优先用书里自带的（EPUB 内封、PDF 首页），
+ * 没有就按书名生成一张配色封面。统一缩成小图存成 dataURL。
+ */
+
+const COVER_W = 300;
+const COVER_H = 420;
+
+/** 书名 → 稳定的色相，保证同一本书每次生成的封面一样 */
+function hashHue(text) {
+  let hash = 0;
+  for (const ch of String(text || '未命名')) {
+    hash = (hash * 31 + ch.codePointAt(0)) % 100000;
+  }
+  return hash % 360;
+}
+
+function makeCanvas(width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+/** 竖排书名，长了就换列 */
+function drawVerticalTitle(ctx, title, x, y, maxHeight, fontSize) {
+  const chars = [...String(title || '')];
+  const step = fontSize * 1.16;
+  let column = 0;
+  let offset = 0;
+  for (const ch of chars) {
+    if (offset + step > maxHeight) { column += 1; offset = 0; }
+    if (column > 2) break;
+    ctx.fillText(ch, x - column * (fontSize * 1.35), y + offset + fontSize);
+    offset += step;
+  }
+}
+
+/**
+ * 按书名生成一张封面
+ * @param {{title: string, author?: string, kind?: string}} book
+ */
+function generateCover(book) {
+  const title = (book && book.title) || '未命名';
+  const hue = hashHue(title);
+  const canvas = makeCanvas(COVER_W, COVER_H);
+  const ctx = canvas.getContext('2d');
+
+  const gradient = ctx.createLinearGradient(0, 0, COVER_W, COVER_H);
+  gradient.addColorStop(0, `hsl(${hue}, 42%, 42%)`);
+  gradient.addColorStop(1, `hsl(${(hue + 38) % 360}, 45%, 26%)`);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, COVER_W, COVER_H);
+
+  // 纹理：几道淡淡的斜线
+  ctx.globalAlpha = 0.07;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 18;
+  for (let i = -COVER_H; i < COVER_W + COVER_H; i += 54) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i + COVER_H, COVER_H);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // 书脊
+  ctx.fillStyle = 'rgba(0,0,0,.22)';
+  ctx.fillRect(0, 0, 16, COVER_H);
+  ctx.fillStyle = 'rgba(255,255,255,.14)';
+  ctx.fillRect(16, 0, 3, COVER_H);
+
+  // 边框
+  ctx.strokeStyle = 'rgba(255,255,255,.35)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(34, 28, COVER_W - 62, COVER_H - 56);
+
+  ctx.fillStyle = '#fff';
+  ctx.textBaseline = 'top';
+  const fontSize = [...title].length > 8 ? 30 : 38;
+  ctx.font = `600 ${fontSize}px "Noto Serif SC", "Songti SC", SimSun, serif`;
+  drawVerticalTitle(ctx, title, COVER_W - 72, 56, COVER_H - 150, fontSize);
+
+  const label = (book && book.author) || { epub: 'EPUB', pdf: 'PDF', mobi: 'MOBI', docx: 'DOCX' }[book && book.kind] || '';
+  if (label) {
+    ctx.globalAlpha = 0.85;
+    ctx.font = '500 16px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText(label, 48, COVER_H - 62);
+    ctx.globalAlpha = 1;
+  }
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+/** 把任意图片（dataURL / Blob）缩放裁切成封面尺寸 */
+function fitCover(source) {
+  return new Promise((resolve, reject) => {
+    const url = typeof source === 'string' ? source : URL.createObjectURL(source);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = makeCanvas(COVER_W, COVER_H);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f0ece2';
+      ctx.fillRect(0, 0, COVER_W, COVER_H);
+      // cover 裁切：铺满且不变形
+      const scale = Math.max(COVER_W / img.width, COVER_H / img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      ctx.drawImage(img, (COVER_W - w) / 2, (COVER_H - h) / 2, w, h);
+      if (typeof source !== 'string') URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => {
+      if (typeof source !== 'string') URL.revokeObjectURL(url);
+      reject(new Error('这张图片读不出来'));
+    };
+    img.src = url;
+  });
+}
+
+/** 字节 + MIME → dataURL */
+function bytesToDataUrl(bytes, mime = 'image/jpeg') {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return `data:${mime};base64,${btoa(binary)}`;
+}
+
+
 /* ===== src/formats/zip.js ===== */
 /**
  * 极简 ZIP 读取（EPUB 就是一个 ZIP）。
@@ -2004,6 +2153,10 @@ async function openZip(buffer) {
         const file = zip.file(name);
         return file ? file.async('string') : null;
       },
+      bytes: async (name) => {
+        const file = zip.file(name);
+        return file ? file.async('uint8array') : null;
+      },
     };
   } catch {
     const entries = await readZip(buffer);
@@ -2011,6 +2164,10 @@ async function openZip(buffer) {
       via: 'builtin',
       names: () => [...entries.keys()],
       text: (name) => readZipText(entries, name),
+      bytes: async (name) => {
+        const entry = entries.get(name);
+        return entry ? entry.read() : null;
+      },
     };
   }
 }
@@ -2087,6 +2244,20 @@ async function parseEpub(buffer) {
   }
   const docs = spine.length ? spine : [...manifest.values()].filter(isDocItem);
 
+  // 内封：先看 metadata 里的 <meta name="cover">，再看 properties="cover-image"，最后按文件名猜
+  let cover = null;
+  const coverMetaId = (opf.match(/<meta[^>]*name\s*=\s*["']cover["'][^>]*content\s*=\s*["']([^"']+)["']/i)
+    || opf.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']cover["']/i) || [])[1];
+  const coverItem = (coverMetaId && manifest.get(coverMetaId))
+    || [...manifest.values()].find((i) => (i.properties || '').includes('cover-image'))
+    || [...manifest.values()].find((i) => /^image\//i.test(i.type || '') && /cover/i.test(i.href || ''));
+  if (coverItem && zip.bytes) {
+    try {
+      const bytes = await zip.bytes(coverItem.href);
+      if (bytes && bytes.length) cover = { bytes, mime: coverItem.type || 'image/jpeg' };
+    } catch { /* 拿不到封面不影响读书 */ }
+  }
+
   const chapters = [];
   for (const doc of docs) {
     const html = await zip.text(doc.href);
@@ -2102,7 +2273,7 @@ async function parseEpub(buffer) {
   }
 
   const text = chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n');
-  return { title, author, chapters, text };
+  return { title, author, chapters, text, cover };
 }
 
 
@@ -2595,6 +2766,7 @@ async function parsePdf(buffer) {
 
 
 
+
 /** 导入分栏：每一栏只认自己的扩展名 */
 const FORMAT_GROUPS = [
   {
@@ -2690,9 +2862,25 @@ async function extractPdfWithPdfjs(buffer, options = {}) {
     if (options.onProgress) options.onProgress(i, doc.numPages);
   }
   const title = await doc.getMetadata().then((m) => (m && m.info && m.info.Title) || '').catch(() => '');
+
+  // 首页渲染成封面
+  let cover = null;
+  try {
+    const first = await doc.getPage(1);
+    const base = first.getViewport({ scale: 1 });
+    const scale = Math.max(COVER_W / base.width, COVER_H / base.height);
+    const viewport = first.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    await first.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport }).promise;
+    cover = canvas.toDataURL('image/jpeg', 0.82);
+    first.cleanup();
+  } catch { /* 封面渲染失败不影响导入 */ }
+
   doc.destroy();
   const cleaned = stripRunningHeads(pages);
-  return { title, pages: cleaned, text: cleaned.filter(Boolean).join('\n\n'), via: 'pdf.js' };
+  return { title, pages: cleaned, text: cleaned.filter(Boolean).join('\n\n'), via: 'pdf.js', cover };
 }
 
 async function readPdf(buffer, options = {}) {
@@ -2893,7 +3081,9 @@ async function readAnyFile(file, options = {}) {
 
   if (ext === 'pdf') {
     const pdf = await readPdf(buffer, options);
-    return { ...base, kind: 'pdf', raw: pdf.text, name: cleanBookTitle(pdf.title || file.name), via: pdf.via };
+    return {
+      ...base, kind: 'pdf', raw: pdf.text, name: cleanBookTitle(pdf.title || file.name), via: pdf.via, cover: pdf.cover || null,
+    };
   }
   if (ext === 'epub') {
     const book = await parseEpub(buffer);
@@ -2904,6 +3094,8 @@ async function readAnyFile(file, options = {}) {
       raw: book.text,
       native: book.chapters,
       name: cleanBookTitle(book.title || file.name),
+      author: book.author || '',
+      cover: book.cover ? bytesToDataUrl(book.cover.bytes, book.cover.mime) : null,
     };
   }
   if (ext === 'docx') {
@@ -3281,10 +3473,11 @@ function createSpeaker(options = {}) {
  */
 
 const DB_NAME = 'novel-reader';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_BOOKS = 'books';
 const STORE_CONTENT = 'contents';
 const STORE_MARKS = 'marks';   // 书签与笔记
+const STORE_COVERS = 'covers'; // 书架封面（dataURL）
 const SETTINGS_KEY = 'novel-reader:settings';
 
 let dbPromise = null;
@@ -3303,6 +3496,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains(STORE_MARKS)) {
         db.createObjectStore(STORE_MARKS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_COVERS)) {
+        db.createObjectStore(STORE_COVERS, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -3376,11 +3572,32 @@ async function updateBook(meta) {
 }
 
 async function deleteBook(id) {
-  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS], 'readwrite', ([books, contents, marks]) => {
+  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS, STORE_COVERS], 'readwrite', ([books, contents, marks, covers]) => {
     books.delete(id);
     contents.delete(id);
     marks.delete(id);
+    covers.delete(id);
   });
+}
+
+/* ---------------- 封面 ---------------- */
+
+async function saveCover(bookId, dataUrl, source = 'generated') {
+  await tx(STORE_COVERS, 'readwrite', (store) => store.put({
+    id: bookId, dataUrl, source, updatedAt: Date.now(),
+  }));
+}
+
+async function getCover(bookId) {
+  return tx(STORE_COVERS, 'readonly', (store) => reqValue(store.get(bookId)));
+}
+
+/** 书架一次性把所有封面取出来 */
+async function allCovers() {
+  const rows = await tx(STORE_COVERS, 'readonly', (store) => reqValue(store.getAll()));
+  const map = new Map();
+  for (const row of rows || []) if (row.dataUrl) map.set(row.id, row);
+  return map;
 }
 
 /* ---------------- 书签与笔记 ---------------- */
@@ -3419,7 +3636,7 @@ async function exportBackup(options = {}) {
   const books = await listBooks();
   const out = {
     format: BACKUP_FORMAT,
-    version: 1,
+    version: 2,
     createdAt: Date.now(),
     includeText,
     settings: loadSettings(),
@@ -3430,6 +3647,11 @@ async function exportBackup(options = {}) {
     /* eslint-disable no-await-in-loop */
     const marks = await getMarks(meta.id);
     const entry = { meta, marks };
+    // 封面只进完整备份：一张约 20KB，放进"轻量备份"就不轻量了
+    if (includeText) {
+      const cover = await getCover(meta.id);
+      if (cover && cover.dataUrl) entry.cover = { dataUrl: cover.dataUrl, source: cover.source };
+    }
     if (includeText) {
       const content = await getContent(meta.id);
       if (content) {
@@ -3474,6 +3696,9 @@ async function importBackup(data, options = {}) {
         target.lastReadAt = incomingTime;
       }
       if (!target.category && meta.category) target.category = meta.category;
+      if (entry.cover && entry.cover.dataUrl && !(await getCover(target.id))) {
+        await saveCover(target.id, entry.cover.dataUrl, entry.cover.source || 'restored');
+      }
       await updateBook(target);
       if ((entry.marks || []).length) {
         const current = await getMarks(target.id);
@@ -3545,7 +3770,8 @@ function saveSettings(settings) {
 
 
 
-const APP_VERSION = '1.7.0';   // 显示在阅读设置里，方便确认用的是哪一版
+
+const APP_VERSION = '1.8.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -3573,6 +3799,7 @@ const state = {
   flow: null,          // 无缝滚动模式下已加载的章节区间
   marks: [],           // 当前书的书签与笔记
   markCounts: new Map(),
+  covers: new Map(),
   editingMark: null,
   ocr: null,
   tts: null,          // 朗读状态：{ speaker, chapterIndex, sentences }
@@ -3756,6 +3983,7 @@ function sortBooks(books) {
 async function refreshShelf() {
   state.books = await listBooks();
   try { state.markCounts = await markCounts(); } catch { state.markCounts = new Map(); }
+  try { state.covers = await allCovers(); } catch { state.covers = new Map(); }
   renderShelf();
   refreshCategoryOptions();
 }
@@ -3771,10 +3999,70 @@ function refreshCategoryOptions() {
   }
 }
 
+/** 没有封面就按书名生成一张，生成后写回 IndexedDB */
+async function ensureCover(book) {
+  if (state.covers.has(book.id)) return state.covers.get(book.id).dataUrl;
+  const dataUrl = generateCover({ title: book.title, kind: book.kind });
+  state.covers.set(book.id, { id: book.id, dataUrl, source: 'generated' });
+  try { await saveCover(book.id, dataUrl, 'generated'); } catch { /* 忽略写入失败 */ }
+  return dataUrl;
+}
+
+async function pickCoverImage(book) {
+  const input = $('cover-input');
+  input.value = '';
+  state.coverTarget = book;
+  input.click();
+}
+
+async function applyCoverFile(file) {
+  const book = state.coverTarget;
+  if (!book || !file) return;
+  try {
+    const dataUrl = await fitCover(file);
+    await saveCover(book.id, dataUrl, 'custom');
+    state.covers.set(book.id, { id: book.id, dataUrl, source: 'custom' });
+    renderShelf();
+    toast(`已更新《${book.title}》的封面`);
+  } catch (err) {
+    toast(`换封面失败：${err.message}`);
+  }
+}
+
+async function regenerateCover(book) {
+  const dataUrl = generateCover({ title: book.title, kind: book.kind });
+  await saveCover(book.id, dataUrl, 'generated');
+  state.covers.set(book.id, { id: book.id, dataUrl, source: 'generated' });
+  renderShelf();
+  toast('封面已重新生成');
+}
+
 function makeBookCard(book) {
   const card = el('div', 'book-card');
   card.dataset.id = book.id;
-  card.appendChild(el('h3', null, book.title));
+
+  const coverBox = el('div', 'cover');
+  const img = document.createElement('img');
+  img.alt = `《${book.title}》封面`;
+  img.loading = 'lazy';
+  const known = state.covers.get(book.id);
+  if (known) img.src = known.dataUrl;
+  else ensureCover(book).then((url) => { img.src = url; });
+  coverBox.appendChild(img);
+  const ops = el('div', 'cover-ops');
+  const changeBtn = el('button', null, '换图');
+  changeBtn.title = '换一张封面图片';
+  changeBtn.addEventListener('click', (e) => { e.stopPropagation(); pickCoverImage(book); });
+  const regenBtn = el('button', null, '重生成');
+  regenBtn.title = '按书名重新生成封面';
+  regenBtn.addEventListener('click', (e) => { e.stopPropagation(); regenerateCover(book); });
+  ops.append(changeBtn, regenBtn);
+  coverBox.appendChild(ops);
+  card.appendChild(coverBox);
+
+  const main = el('div', 'book-main');
+  card.appendChild(main);
+  main.appendChild(el('h3', null, book.title));
 
   const tags = el('div', 'tags');
   tags.appendChild(el('span', 'tag', bookCategory(book)));
@@ -3782,19 +4070,19 @@ function makeBookCard(book) {
   if (kindLabel) tags.appendChild(el('span', 'tag', kindLabel));
   const marks = (state.markCounts && state.markCounts.get(book.id)) || 0;
   if (marks) tags.appendChild(el('span', 'tag mark', `${marks} 条笔记/书签`));
-  card.appendChild(tags);
+  main.appendChild(tags);
 
   const percent = bookPercent(book);
   const meta = el('div', 'book-meta');
   meta.innerHTML = `${fmtNum(book.chapterCount)} 章 · ${fmtNum(book.charCount)} 字 · 已读 ${percent}%<br>`
     + `${book.lastReadAt ? `上次阅读：${new Date(book.lastReadAt).toLocaleString('zh-CN')}` : '尚未阅读'}`;
-  card.appendChild(meta);
+  main.appendChild(meta);
 
   const bar = el('div', 'book-progress');
   const inner = el('i');
   inner.style.width = `${percent}%`;
   bar.appendChild(inner);
-  card.appendChild(bar);
+  main.appendChild(bar);
 
   const actions = el('div', 'book-actions');
   const readBtn = el('button', 'primary-btn', book.progress && book.lastReadAt ? '继续阅读' : '开始阅读');
@@ -3819,7 +4107,7 @@ function makeBookCard(book) {
     toast('已删除');
   });
   actions.append(readBtn, catBtn, delBtn);
-  card.appendChild(actions);
+  main.appendChild(actions);
   card.addEventListener('click', () => openBook(book.id));
   return card;
 }
@@ -4088,6 +4376,7 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
     native: native && native.length ? native : null,
     kind: encodingInfo.kind || 'txt',
     file: encodingInfo.file || null,
+    cover: encodingInfo.cover || null,
   };
   // PDF 文字提取不理想时，可以直接转去 OCR
   $('btn-ocr-again').classList.toggle('hidden', !(encodingInfo.file && extOf(encodingInfo.file.name) === 'pdf'));
@@ -4211,6 +4500,12 @@ async function confirmImport() {
     toast(`保存失败：${err && err.message ? err.message : err}`);
     return;
   }
+  // 封面：优先用书里自带的，没有就按书名生成
+  try {
+    const dataUrl = pending.cover ? await fitCover(pending.cover) : generateCover({ title, kind: meta.kind });
+    await saveCover(id, dataUrl, pending.cover ? 'embedded' : 'generated');
+  } catch { /* 封面失败不影响导入 */ }
+
   hideModal('import-modal');
   state.pending = null;
   await refreshShelf();
@@ -4385,6 +4680,10 @@ async function batchImport(files) {
         chapterTexts: chapters.map((c) => c.content),
         nativeChapters: info.native || null,
       });
+      try {
+        const dataUrl = info.cover ? await fitCover(info.cover) : generateCover({ title: info.name, kind: info.kind });
+        await saveCover(meta.id, dataUrl, info.cover ? 'embedded' : 'generated');
+      } catch { /* 封面失败不影响入库 */ }
       existing.push(meta);
       ok += 1;
       const repaired = split && split.repair && split.repair.inserted ? `，补回 ${split.repair.inserted} 章` : '';
@@ -5164,6 +5463,11 @@ function bindEvents() {
     renderShelf();
   });
 
+  $('cover-input').addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (file) applyCoverFile(file);
+  });
   $('btn-choose-folder').addEventListener('click', () => $('folder-input').click());
   $('folder-input').addEventListener('change', (e) => {
     handleFiles([...e.target.files], { batch: true });

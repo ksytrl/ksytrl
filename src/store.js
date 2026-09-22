@@ -4,10 +4,11 @@
  */
 
 const DB_NAME = 'novel-reader';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_BOOKS = 'books';
 const STORE_CONTENT = 'contents';
 const STORE_MARKS = 'marks';   // 书签与笔记
+const STORE_COVERS = 'covers'; // 书架封面（dataURL）
 const SETTINGS_KEY = 'novel-reader:settings';
 
 let dbPromise = null;
@@ -26,6 +27,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains(STORE_MARKS)) {
         db.createObjectStore(STORE_MARKS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_COVERS)) {
+        db.createObjectStore(STORE_COVERS, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -99,11 +103,32 @@ export async function updateBook(meta) {
 }
 
 export async function deleteBook(id) {
-  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS], 'readwrite', ([books, contents, marks]) => {
+  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS, STORE_COVERS], 'readwrite', ([books, contents, marks, covers]) => {
     books.delete(id);
     contents.delete(id);
     marks.delete(id);
+    covers.delete(id);
   });
+}
+
+/* ---------------- 封面 ---------------- */
+
+export async function saveCover(bookId, dataUrl, source = 'generated') {
+  await tx(STORE_COVERS, 'readwrite', (store) => store.put({
+    id: bookId, dataUrl, source, updatedAt: Date.now(),
+  }));
+}
+
+export async function getCover(bookId) {
+  return tx(STORE_COVERS, 'readonly', (store) => reqValue(store.get(bookId)));
+}
+
+/** 书架一次性把所有封面取出来 */
+export async function allCovers() {
+  const rows = await tx(STORE_COVERS, 'readonly', (store) => reqValue(store.getAll()));
+  const map = new Map();
+  for (const row of rows || []) if (row.dataUrl) map.set(row.id, row);
+  return map;
 }
 
 /* ---------------- 书签与笔记 ---------------- */
@@ -142,7 +167,7 @@ export async function exportBackup(options = {}) {
   const books = await listBooks();
   const out = {
     format: BACKUP_FORMAT,
-    version: 1,
+    version: 2,
     createdAt: Date.now(),
     includeText,
     settings: loadSettings(),
@@ -153,6 +178,11 @@ export async function exportBackup(options = {}) {
     /* eslint-disable no-await-in-loop */
     const marks = await getMarks(meta.id);
     const entry = { meta, marks };
+    // 封面只进完整备份：一张约 20KB，放进"轻量备份"就不轻量了
+    if (includeText) {
+      const cover = await getCover(meta.id);
+      if (cover && cover.dataUrl) entry.cover = { dataUrl: cover.dataUrl, source: cover.source };
+    }
     if (includeText) {
       const content = await getContent(meta.id);
       if (content) {
@@ -197,6 +227,9 @@ export async function importBackup(data, options = {}) {
         target.lastReadAt = incomingTime;
       }
       if (!target.category && meta.category) target.category = meta.category;
+      if (entry.cover && entry.cover.dataUrl && !(await getCover(target.id))) {
+        await saveCover(target.id, entry.cover.dataUrl, entry.cover.source || 'restored');
+      }
       await updateBook(target);
       if ((entry.marks || []).length) {
         const current = await getMarks(target.id);

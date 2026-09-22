@@ -10,6 +10,7 @@ import { cleanBookTitle } from '../cleaner.js';
 import { parseEpub, htmlToText, decodeEntities, openZip } from './epub.js';
 import { parsePdf, stripRunningHeads } from './pdf.js';
 import { loadPdfjs } from './vendor.js';
+import { bytesToDataUrl, COVER_W, COVER_H } from '../cover.js';
 
 /** 导入分栏：每一栏只认自己的扩展名 */
 export const FORMAT_GROUPS = [
@@ -106,9 +107,25 @@ export async function extractPdfWithPdfjs(buffer, options = {}) {
     if (options.onProgress) options.onProgress(i, doc.numPages);
   }
   const title = await doc.getMetadata().then((m) => (m && m.info && m.info.Title) || '').catch(() => '');
+
+  // 首页渲染成封面
+  let cover = null;
+  try {
+    const first = await doc.getPage(1);
+    const base = first.getViewport({ scale: 1 });
+    const scale = Math.max(COVER_W / base.width, COVER_H / base.height);
+    const viewport = first.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    await first.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport }).promise;
+    cover = canvas.toDataURL('image/jpeg', 0.82);
+    first.cleanup();
+  } catch { /* 封面渲染失败不影响导入 */ }
+
   doc.destroy();
   const cleaned = stripRunningHeads(pages);
-  return { title, pages: cleaned, text: cleaned.filter(Boolean).join('\n\n'), via: 'pdf.js' };
+  return { title, pages: cleaned, text: cleaned.filter(Boolean).join('\n\n'), via: 'pdf.js', cover };
 }
 
 export async function readPdf(buffer, options = {}) {
@@ -309,7 +326,9 @@ export async function readAnyFile(file, options = {}) {
 
   if (ext === 'pdf') {
     const pdf = await readPdf(buffer, options);
-    return { ...base, kind: 'pdf', raw: pdf.text, name: cleanBookTitle(pdf.title || file.name), via: pdf.via };
+    return {
+      ...base, kind: 'pdf', raw: pdf.text, name: cleanBookTitle(pdf.title || file.name), via: pdf.via, cover: pdf.cover || null,
+    };
   }
   if (ext === 'epub') {
     const book = await parseEpub(buffer);
@@ -320,6 +339,8 @@ export async function readAnyFile(file, options = {}) {
       raw: book.text,
       native: book.chapters,
       name: cleanBookTitle(book.title || file.name),
+      author: book.author || '',
+      cover: book.cover ? bytesToDataUrl(book.cover.bytes, book.cover.mime) : null,
     };
   }
   if (ext === 'docx') {

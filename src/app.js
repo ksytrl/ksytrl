@@ -17,10 +17,12 @@ import {
 import {
   listBooks, getContent, saveBook, updateBook, deleteBook, newId,
   getMarks, saveMarks, markCounts, exportBackup, importBackup,
+  saveCover, allCovers,
   loadSettings, saveSettings, DEFAULT_SETTINGS,
 } from './store.js';
+import { generateCover, fitCover } from './cover.js';
 
-const APP_VERSION = '1.7.0';   // 显示在阅读设置里，方便确认用的是哪一版
+const APP_VERSION = '1.8.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -48,6 +50,7 @@ const state = {
   flow: null,          // 无缝滚动模式下已加载的章节区间
   marks: [],           // 当前书的书签与笔记
   markCounts: new Map(),
+  covers: new Map(),
   editingMark: null,
   ocr: null,
   tts: null,          // 朗读状态：{ speaker, chapterIndex, sentences }
@@ -231,6 +234,7 @@ function sortBooks(books) {
 async function refreshShelf() {
   state.books = await listBooks();
   try { state.markCounts = await markCounts(); } catch { state.markCounts = new Map(); }
+  try { state.covers = await allCovers(); } catch { state.covers = new Map(); }
   renderShelf();
   refreshCategoryOptions();
 }
@@ -246,10 +250,70 @@ function refreshCategoryOptions() {
   }
 }
 
+/** 没有封面就按书名生成一张，生成后写回 IndexedDB */
+async function ensureCover(book) {
+  if (state.covers.has(book.id)) return state.covers.get(book.id).dataUrl;
+  const dataUrl = generateCover({ title: book.title, kind: book.kind });
+  state.covers.set(book.id, { id: book.id, dataUrl, source: 'generated' });
+  try { await saveCover(book.id, dataUrl, 'generated'); } catch { /* 忽略写入失败 */ }
+  return dataUrl;
+}
+
+async function pickCoverImage(book) {
+  const input = $('cover-input');
+  input.value = '';
+  state.coverTarget = book;
+  input.click();
+}
+
+async function applyCoverFile(file) {
+  const book = state.coverTarget;
+  if (!book || !file) return;
+  try {
+    const dataUrl = await fitCover(file);
+    await saveCover(book.id, dataUrl, 'custom');
+    state.covers.set(book.id, { id: book.id, dataUrl, source: 'custom' });
+    renderShelf();
+    toast(`已更新《${book.title}》的封面`);
+  } catch (err) {
+    toast(`换封面失败：${err.message}`);
+  }
+}
+
+async function regenerateCover(book) {
+  const dataUrl = generateCover({ title: book.title, kind: book.kind });
+  await saveCover(book.id, dataUrl, 'generated');
+  state.covers.set(book.id, { id: book.id, dataUrl, source: 'generated' });
+  renderShelf();
+  toast('封面已重新生成');
+}
+
 function makeBookCard(book) {
   const card = el('div', 'book-card');
   card.dataset.id = book.id;
-  card.appendChild(el('h3', null, book.title));
+
+  const coverBox = el('div', 'cover');
+  const img = document.createElement('img');
+  img.alt = `《${book.title}》封面`;
+  img.loading = 'lazy';
+  const known = state.covers.get(book.id);
+  if (known) img.src = known.dataUrl;
+  else ensureCover(book).then((url) => { img.src = url; });
+  coverBox.appendChild(img);
+  const ops = el('div', 'cover-ops');
+  const changeBtn = el('button', null, '换图');
+  changeBtn.title = '换一张封面图片';
+  changeBtn.addEventListener('click', (e) => { e.stopPropagation(); pickCoverImage(book); });
+  const regenBtn = el('button', null, '重生成');
+  regenBtn.title = '按书名重新生成封面';
+  regenBtn.addEventListener('click', (e) => { e.stopPropagation(); regenerateCover(book); });
+  ops.append(changeBtn, regenBtn);
+  coverBox.appendChild(ops);
+  card.appendChild(coverBox);
+
+  const main = el('div', 'book-main');
+  card.appendChild(main);
+  main.appendChild(el('h3', null, book.title));
 
   const tags = el('div', 'tags');
   tags.appendChild(el('span', 'tag', bookCategory(book)));
@@ -257,19 +321,19 @@ function makeBookCard(book) {
   if (kindLabel) tags.appendChild(el('span', 'tag', kindLabel));
   const marks = (state.markCounts && state.markCounts.get(book.id)) || 0;
   if (marks) tags.appendChild(el('span', 'tag mark', `${marks} 条笔记/书签`));
-  card.appendChild(tags);
+  main.appendChild(tags);
 
   const percent = bookPercent(book);
   const meta = el('div', 'book-meta');
   meta.innerHTML = `${fmtNum(book.chapterCount)} 章 · ${fmtNum(book.charCount)} 字 · 已读 ${percent}%<br>`
     + `${book.lastReadAt ? `上次阅读：${new Date(book.lastReadAt).toLocaleString('zh-CN')}` : '尚未阅读'}`;
-  card.appendChild(meta);
+  main.appendChild(meta);
 
   const bar = el('div', 'book-progress');
   const inner = el('i');
   inner.style.width = `${percent}%`;
   bar.appendChild(inner);
-  card.appendChild(bar);
+  main.appendChild(bar);
 
   const actions = el('div', 'book-actions');
   const readBtn = el('button', 'primary-btn', book.progress && book.lastReadAt ? '继续阅读' : '开始阅读');
@@ -294,7 +358,7 @@ function makeBookCard(book) {
     toast('已删除');
   });
   actions.append(readBtn, catBtn, delBtn);
-  card.appendChild(actions);
+  main.appendChild(actions);
   card.addEventListener('click', () => openBook(book.id));
   return card;
 }
@@ -563,6 +627,7 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
     native: native && native.length ? native : null,
     kind: encodingInfo.kind || 'txt',
     file: encodingInfo.file || null,
+    cover: encodingInfo.cover || null,
   };
   // PDF 文字提取不理想时，可以直接转去 OCR
   $('btn-ocr-again').classList.toggle('hidden', !(encodingInfo.file && extOf(encodingInfo.file.name) === 'pdf'));
@@ -686,6 +751,12 @@ async function confirmImport() {
     toast(`保存失败：${err && err.message ? err.message : err}`);
     return;
   }
+  // 封面：优先用书里自带的，没有就按书名生成
+  try {
+    const dataUrl = pending.cover ? await fitCover(pending.cover) : generateCover({ title, kind: meta.kind });
+    await saveCover(id, dataUrl, pending.cover ? 'embedded' : 'generated');
+  } catch { /* 封面失败不影响导入 */ }
+
   hideModal('import-modal');
   state.pending = null;
   await refreshShelf();
@@ -860,6 +931,10 @@ async function batchImport(files) {
         chapterTexts: chapters.map((c) => c.content),
         nativeChapters: info.native || null,
       });
+      try {
+        const dataUrl = info.cover ? await fitCover(info.cover) : generateCover({ title: info.name, kind: info.kind });
+        await saveCover(meta.id, dataUrl, info.cover ? 'embedded' : 'generated');
+      } catch { /* 封面失败不影响入库 */ }
       existing.push(meta);
       ok += 1;
       const repaired = split && split.repair && split.repair.inserted ? `，补回 ${split.repair.inserted} 章` : '';
@@ -1639,6 +1714,11 @@ function bindEvents() {
     renderShelf();
   });
 
+  $('cover-input').addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (file) applyCoverFile(file);
+  });
   $('btn-choose-folder').addEventListener('click', () => $('folder-input').click());
   $('folder-input').addEventListener('change', (e) => {
     handleFiles([...e.target.files], { batch: true });

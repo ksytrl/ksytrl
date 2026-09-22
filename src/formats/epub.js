@@ -125,6 +125,10 @@ export async function openZip(buffer) {
         const file = zip.file(name);
         return file ? file.async('string') : null;
       },
+      bytes: async (name) => {
+        const file = zip.file(name);
+        return file ? file.async('uint8array') : null;
+      },
     };
   } catch {
     const entries = await readZip(buffer);
@@ -132,6 +136,10 @@ export async function openZip(buffer) {
       via: 'builtin',
       names: () => [...entries.keys()],
       text: (name) => readZipText(entries, name),
+      bytes: async (name) => {
+        const entry = entries.get(name);
+        return entry ? entry.read() : null;
+      },
     };
   }
 }
@@ -208,6 +216,20 @@ export async function parseEpub(buffer) {
   }
   const docs = spine.length ? spine : [...manifest.values()].filter(isDocItem);
 
+  // 内封：先看 metadata 里的 <meta name="cover">，再看 properties="cover-image"，最后按文件名猜
+  let cover = null;
+  const coverMetaId = (opf.match(/<meta[^>]*name\s*=\s*["']cover["'][^>]*content\s*=\s*["']([^"']+)["']/i)
+    || opf.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']cover["']/i) || [])[1];
+  const coverItem = (coverMetaId && manifest.get(coverMetaId))
+    || [...manifest.values()].find((i) => (i.properties || '').includes('cover-image'))
+    || [...manifest.values()].find((i) => /^image\//i.test(i.type || '') && /cover/i.test(i.href || ''));
+  if (coverItem && zip.bytes) {
+    try {
+      const bytes = await zip.bytes(coverItem.href);
+      if (bytes && bytes.length) cover = { bytes, mime: coverItem.type || 'image/jpeg' };
+    } catch { /* 拿不到封面不影响读书 */ }
+  }
+
   const chapters = [];
   for (const doc of docs) {
     const html = await zip.text(doc.href);
@@ -223,5 +245,5 @@ export async function parseEpub(buffer) {
   }
 
   const text = chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n');
-  return { title, author, chapters, text };
+  return { title, author, chapters, text, cover };
 }

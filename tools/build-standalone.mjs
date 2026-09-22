@@ -15,6 +15,7 @@ const MODULES = [
   'src/encoding.js',
   'src/chapters.js',
   'src/cleaner.js',
+  'src/cover.js',
   'src/formats/zip.js',
   'src/formats/vendor.js',
   'src/formats/epub.js',
