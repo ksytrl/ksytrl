@@ -58,18 +58,31 @@
       <div class="shelf-head">
         <h2>我的书架</h2>
         <span class="muted" id="shelf-count"></span>
+        <div class="grow"></div>
+        <button class="ghost-btn" id="btn-tidy">智能整理</button>
+        <button class="ghost-btn" id="btn-select-mode">批量管理</button>
+        <div class="view-toggle" id="view-toggle">
+          <button data-view="grid" title="封面墙">▦</button>
+          <button data-view="list" title="列表">☰</button>
+        </div>
       </div>
-      <div class="shelf-tools">
-        <input type="search" id="shelf-search" placeholder="搜索书名 / 分类">
-        <select id="shelf-sort">
-          <option value="recent">最近阅读</option>
-          <option value="created">最近导入</option>
-          <option value="title">按书名</option>
-          <option value="progress">按阅读进度</option>
-        </select>
+      <div class="shelf-layout">
+        <aside class="shelf-side" id="shelf-side"></aside>
+        <div class="shelf-main">
+          <div class="shelf-tools">
+            <input type="search" id="shelf-search" placeholder="搜索书名 / 分类">
+            <select id="shelf-sort">
+              <option value="recent">最近阅读</option>
+              <option value="created">最近导入</option>
+              <option value="title">按书名</option>
+              <option value="progress">按阅读进度</option>
+            </select>
+          </div>
+          <div class="category-bar" id="category-bar"></div>
+          <div class="book-grid" id="book-grid"></div>
+          <div class="pager hidden" id="pager"></div>
+        </div>
       </div>
-      <div class="category-bar" id="category-bar"></div>
-      <div class="book-grid" id="book-grid"></div>
       <p class="empty-tip" id="shelf-empty">书架还是空的，先导入一本书吧（TXT / EPUB / PDF，或一整个文件夹）。</p>
 
       <section class="features">
@@ -406,6 +419,33 @@
       <button class="ghost-btn hidden" id="error-action"></button>
       <div class="grow"></div>
       <button class="primary-btn" id="error-ok">知道了</button>
+    </div>
+  </div>
+</div>
+
+<div class="bulk-bar hidden" id="bulk-bar">
+  <span id="bulk-count">已选 0 本</span>
+  <button class="ghost-btn" id="bulk-all">全选本页</button>
+  <button class="ghost-btn" id="bulk-none">取消选择</button>
+  <div class="grow"></div>
+  <button class="ghost-btn" id="bulk-category">设为分类…</button>
+  <button class="ghost-btn danger" id="bulk-delete">删除</button>
+  <button class="icon-btn" id="bulk-exit" title="退出批量管理">✕</button>
+</div>
+
+<div class="modal hidden" id="tidy-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong>智能整理书架</strong>
+      <button class="icon-btn" id="tidy-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <p class="muted small">挑一种方式，会给所有书重新分类（原来的分类会被覆盖，可以再改回来）。</p>
+      <div class="tidy-options" id="tidy-options"></div>
+      <div class="muted small" id="tidy-preview"></div>
+    </div>
+    <div class="modal-foot">
+      <div class="grow"></div>
+      <button class="ghost-btn" id="tidy-cancel">取消</button>
+      <button class="primary-btn" id="tidy-apply">按这个整理</button>
     </div>
   </div>
 </div>

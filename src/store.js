@@ -256,6 +256,7 @@ export async function importBackup(data, options = {}) {
 
 export const DEFAULT_SETTINGS = {
   theme: 'sepia',
+  shelfView: 'grid',        // grid = 封面墙，list = 列表
   shelfSort: 'recent',      // recent | title | created
   shelfCategory: '',        // 书架当前筛选的分类，空 = 全部
   readingMode: 'scroll',   // 'scroll' = 上下无缝滚动，'paged' = 一章一页

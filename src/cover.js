@@ -22,15 +22,17 @@ function makeCanvas(width, height) {
   return canvas;
 }
 
-/** 竖排书名，长了就换列 */
+/** 竖排书名，长了就换列；太长的书名截断，免得挤成三四列 */
 function drawVerticalTitle(ctx, title, x, y, maxHeight, fontSize) {
-  const chars = [...String(title || '')];
+  let text = String(title || '');
+  if ([...text].length > 13) text = `${[...text].slice(0, 12).join('')}…`;
+  const chars = [...text];
   const step = fontSize * 1.16;
   let column = 0;
   let offset = 0;
   for (const ch of chars) {
     if (offset + step > maxHeight) { column += 1; offset = 0; }
-    if (column > 2) break;
+    if (column > 1) break;
     ctx.fillText(ch, x - column * (fontSize * 1.35), y + offset + fontSize);
     offset += step;
   }

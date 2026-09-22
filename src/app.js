@@ -17,12 +17,12 @@ import {
 import {
   listBooks, getContent, saveBook, updateBook, deleteBook, newId,
   getMarks, saveMarks, markCounts, exportBackup, importBackup,
-  saveCover, allCovers,
+  saveCover, getCover,
   loadSettings, saveSettings, DEFAULT_SETTINGS,
 } from './store.js';
 import { generateCover, fitCover } from './cover.js';
 
-const APP_VERSION = '1.8.0';   // 显示在阅读设置里，方便确认用的是哪一版
+const APP_VERSION = '1.9.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -51,6 +51,7 @@ const state = {
   marks: [],           // 当前书的书签与笔记
   markCounts: new Map(),
   covers: new Map(),
+  shelf: { selecting: false, picked: new Set(), page: 1, status: 'all', tidyPlan: 'format' },
   editingMark: null,
   ocr: null,
   tts: null,          // 朗读状态：{ speaker, chapterIndex, sentences }
@@ -198,12 +199,25 @@ function importTips(fileName) {
 function hideModal(id) { $(id).classList.add('hidden'); }
 
 /* =========================================================
- * 书架：分类、搜索、排序
+ * 书架：分类侧栏 / 封面墙 / 搜索排序 / 批量管理 / 智能整理
  * =======================================================*/
 const UNCATEGORIZED = '未分类';
+const PAGE_SIZE = { grid: 60, list: 24 };
+
+const STATUS_LABELS = { all: '全部', reading: '在读', unread: '未读', done: '读完' };
 
 function bookCategory(book) {
   return (book.category || '').trim() || UNCATEGORIZED;
+}
+
+function bookPercent(book) {
+  if (!book.progress || !book.chapterCount || !book.lastReadAt) return 0;
+  return Math.min(100, Math.round(((book.progress.chapterIndex + 1) / book.chapterCount) * 100));
+}
+
+function readStatus(book) {
+  if (!book.lastReadAt) return 'unread';
+  return bookPercent(book) >= 98 ? 'done' : 'reading';
 }
 
 function allCategories() {
@@ -214,11 +228,6 @@ function allCategories() {
   }
   return [...map.entries()]
     .sort((a, b) => (a[0] === UNCATEGORIZED ? 1 : b[0] === UNCATEGORIZED ? -1 : b[1] - a[1] || a[0].localeCompare(b[0], 'zh')));
-}
-
-function bookPercent(book) {
-  if (!book.progress || !book.chapterCount || !book.lastReadAt) return 0;
-  return Math.min(100, Math.round(((book.progress.chapterIndex + 1) / book.chapterCount) * 100));
 }
 
 function sortBooks(books) {
@@ -234,7 +243,6 @@ function sortBooks(books) {
 async function refreshShelf() {
   state.books = await listBooks();
   try { state.markCounts = await markCounts(); } catch { state.markCounts = new Map(); }
-  try { state.covers = await allCovers(); } catch { state.covers = new Map(); }
   renderShelf();
   refreshCategoryOptions();
 }
@@ -250,13 +258,23 @@ function refreshCategoryOptions() {
   }
 }
 
-/** 没有封面就按书名生成一张，生成后写回 IndexedDB */
-async function ensureCover(book) {
-  if (state.covers.has(book.id)) return state.covers.get(book.id).dataUrl;
-  const dataUrl = generateCover({ title: book.title, kind: book.kind });
-  state.covers.set(book.id, { id: book.id, dataUrl, source: 'generated' });
-  try { await saveCover(book.id, dataUrl, 'generated'); } catch { /* 忽略写入失败 */ }
-  return dataUrl;
+/* ---------------- 封面：只给当前这一页的书按需加载 ---------------- */
+async function loadCoversFor(books) {
+  for (const book of books) {
+    if (state.covers.has(book.id)) continue;
+    /* eslint-disable no-await-in-loop */
+    let row = null;
+    try { row = await getCover(book.id); } catch { row = null; }
+    if (!row || !row.dataUrl) {
+      const dataUrl = generateCover({ title: book.title, kind: book.kind });
+      row = { id: book.id, dataUrl, source: 'generated' };
+      try { await saveCover(book.id, dataUrl, 'generated'); } catch { /* 忽略 */ }
+    }
+    /* eslint-enable no-await-in-loop */
+    state.covers.set(book.id, row);
+    const img = document.querySelector(`.book-card[data-id="${book.id}"] .cover img`);
+    if (img) img.src = row.dataUrl;
+  }
 }
 
 async function pickCoverImage(book) {
@@ -288,8 +306,165 @@ async function regenerateCover(book) {
   toast('封面已重新生成');
 }
 
+/* ---------------- 批量管理 ---------------- */
+function selecting() { return !!state.shelf.selecting; }
+
+function togglePick(book) {
+  if (state.shelf.picked.has(book.id)) state.shelf.picked.delete(book.id);
+  else state.shelf.picked.add(book.id);
+  renderShelf();
+}
+
+function exitSelectMode() {
+  state.shelf.selecting = false;
+  state.shelf.picked.clear();
+  renderShelf();
+}
+
+async function bulkSetCategory() {
+  const ids = [...state.shelf.picked];
+  if (!ids.length) { toast('先选几本书'); return; }
+  // eslint-disable-next-line no-alert
+  const name = prompt(`把选中的 ${ids.length} 本书放到哪个分类？`, '');
+  if (name == null) return;
+  const category = name.trim() === UNCATEGORIZED ? '' : name.trim();
+  for (const id of ids) {
+    const book = state.books.find((b) => b.id === id);
+    if (!book) continue;
+    book.category = category;
+    await updateBook(book);   // eslint-disable-line no-await-in-loop
+  }
+  state.shelf.picked.clear();     // 归完类就清掉勾选，免得下一步误操作
+  await refreshShelf();
+  toast(`${ids.length} 本书已归到「${category || UNCATEGORIZED}」`);
+}
+
+async function bulkDelete() {
+  const ids = [...state.shelf.picked];
+  if (!ids.length) { toast('先选几本书'); return; }
+  // eslint-disable-next-line no-alert
+  if (!confirm(`确定要删除选中的 ${ids.length} 本书吗？（连同它们的书签笔记）`)) return;
+  for (const id of ids) await deleteBook(id);   // eslint-disable-line no-await-in-loop
+  state.shelf.picked.clear();
+  await refreshShelf();
+  toast(`已删除 ${ids.length} 本`);
+}
+
+function renderBulkBar() {
+  const bar = $('bulk-bar');
+  bar.classList.toggle('hidden', !selecting());
+  $('bulk-count').textContent = `已选 ${state.shelf.picked.size} 本`;
+}
+
+/* ---------------- 智能整理 ---------------- */
+/** 去掉"第X部/上中下"之类的卷号，得到系列名 */
+export function seriesKey(title) {
+  const original = String(title || '').trim();
+  let name = original;
+  name = name.replace(/[\s_\-—]*[（(【\[]?\s*(?:第?\s*[0-9一二三四五六七八九十百]+\s*[部卷集册季]|上|中|下|终|完结|番外)\s*[)）】\]]?\s*$/g, '');
+  // 去掉结尾的序号，但书名本身就是数字时不要动（比如《1984》）
+  const stripped = name.replace(/[\s_\-—]+[0-9]{1,3}\s*$/, '');
+  if (stripped.trim().length >= 2) name = stripped;
+  return name.trim().length >= 2 ? name.trim() : original;
+}
+
+const TIDY_PLANS = [
+  {
+    id: 'format',
+    label: '按格式分',
+    desc: 'PDF / EPUB / TXT / MOBI …，一眼看出每本是什么文件',
+    keyOf: (book) => ({
+      pdf: 'PDF', epub: 'EPUB', txt: 'TXT', mobi: 'MOBI', docx: 'DOCX',
+      html: 'HTML', md: 'Markdown', fb2: 'FB2', rtf: 'RTF', paste: '粘贴文本',
+    }[book.kind] || 'TXT'),
+  },
+  {
+    id: 'status',
+    label: '按阅读状态分',
+    desc: '在读 / 未读 / 读完，接着读哪本一目了然',
+    keyOf: (book) => STATUS_LABELS[readStatus(book)],
+  },
+  {
+    id: 'series',
+    label: '按书名系列分',
+    desc: '「斗破苍穹 第一部」「斗破苍穹 第二部」会归到同一个系列；落单的书放进「单本」',
+    keyOf: (book) => seriesKey(book.title),
+    postProcess: (groups) => {
+      const out = new Map();
+      for (const [key, books] of groups) {
+        if (books.length >= 2) out.set(key, books);
+        else out.set('单本', (out.get('单本') || []).concat(books));
+      }
+      return out;
+    },
+  },
+];
+
+function planGroups(plan) {
+  const groups = new Map();
+  for (const book of state.books) {
+    const key = plan.keyOf(book) || UNCATEGORIZED;
+    groups.set(key, (groups.get(key) || []).concat(book));
+  }
+  return plan.postProcess ? plan.postProcess(groups) : groups;
+}
+
+function renderTidyOptions() {
+  const box = $('tidy-options');
+  box.innerHTML = '';
+  for (const plan of TIDY_PLANS) {
+    const label = el('label');
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'tidy-plan';
+    input.value = plan.id;
+    input.checked = plan.id === (state.shelf.tidyPlan || 'format');
+    input.addEventListener('change', () => {
+      state.shelf.tidyPlan = plan.id;
+      renderTidyPreview();
+    });
+    const text = el('div');
+    text.append(el('div', null, plan.label), el('div', 'desc', plan.desc));
+    label.append(input, text);
+    box.appendChild(label);
+  }
+  renderTidyPreview();
+}
+
+function renderTidyPreview() {
+  const plan = TIDY_PLANS.find((p) => p.id === (state.shelf.tidyPlan || 'format')) || TIDY_PLANS[0];
+  const groups = planGroups(plan);
+  const sample = [...groups.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 6)
+    .map(([name, books]) => `${name}（${books.length}）`)
+    .join('、');
+  $('tidy-preview').textContent = `会分成 ${groups.size} 个分类：${sample}${groups.size > 6 ? ' …' : ''}`;
+}
+
+async function applyTidy() {
+  const plan = TIDY_PLANS.find((p) => p.id === (state.shelf.tidyPlan || 'format')) || TIDY_PLANS[0];
+  const groups = planGroups(plan);
+  let changed = 0;
+  for (const [name, books] of groups) {
+    for (const book of books) {
+      if (bookCategory(book) === name) continue;
+      book.category = name === UNCATEGORIZED ? '' : name;
+      await updateBook(book);   // eslint-disable-line no-await-in-loop
+      changed += 1;
+    }
+  }
+  hideModal('tidy-modal');
+  state.settings.shelfCategory = '';
+  saveSettings(state.settings);
+  await refreshShelf();
+  toast(`整理完成：${groups.size} 个分类，调整了 ${changed} 本`);
+}
+
+/* ---------------- 渲染 ---------------- */
 function makeBookCard(book) {
-  const card = el('div', 'book-card');
+  const grid = (state.settings.shelfView || 'grid') === 'grid';
+  const card = el('div', `book-card${state.shelf.picked.has(book.id) ? ' picked' : ''}`);
   card.dataset.id = book.id;
 
   const coverBox = el('div', 'cover');
@@ -298,14 +473,12 @@ function makeBookCard(book) {
   img.loading = 'lazy';
   const known = state.covers.get(book.id);
   if (known) img.src = known.dataUrl;
-  else ensureCover(book).then((url) => { img.src = url; });
   coverBox.appendChild(img);
+  coverBox.appendChild(el('div', 'pick', state.shelf.picked.has(book.id) ? '✓' : ''));
   const ops = el('div', 'cover-ops');
   const changeBtn = el('button', null, '换图');
-  changeBtn.title = '换一张封面图片';
   changeBtn.addEventListener('click', (e) => { e.stopPropagation(); pickCoverImage(book); });
   const regenBtn = el('button', null, '重生成');
-  regenBtn.title = '按书名重新生成封面';
   regenBtn.addEventListener('click', (e) => { e.stopPropagation(); regenerateCover(book); });
   ops.append(changeBtn, regenBtn);
   coverBox.appendChild(ops);
@@ -315,18 +488,22 @@ function makeBookCard(book) {
   card.appendChild(main);
   main.appendChild(el('h3', null, book.title));
 
-  const tags = el('div', 'tags');
-  tags.appendChild(el('span', 'tag', bookCategory(book)));
-  const kindLabel = { epub: 'EPUB', pdf: 'PDF', paste: '粘贴' }[book.kind];
-  if (kindLabel) tags.appendChild(el('span', 'tag', kindLabel));
-  const marks = (state.markCounts && state.markCounts.get(book.id)) || 0;
-  if (marks) tags.appendChild(el('span', 'tag mark', `${marks} 条笔记/书签`));
-  main.appendChild(tags);
-
   const percent = bookPercent(book);
+  if (!grid) {
+    const tags = el('div', 'tags');
+    tags.appendChild(el('span', 'tag', bookCategory(book)));
+    const kindLabel = { epub: 'EPUB', pdf: 'PDF', paste: '粘贴' }[book.kind];
+    if (kindLabel) tags.appendChild(el('span', 'tag', kindLabel));
+    const marks = (state.markCounts && state.markCounts.get(book.id)) || 0;
+    if (marks) tags.appendChild(el('span', 'tag mark', `${marks} 条笔记/书签`));
+    main.appendChild(tags);
+  }
+
   const meta = el('div', 'book-meta');
-  meta.innerHTML = `${fmtNum(book.chapterCount)} 章 · ${fmtNum(book.charCount)} 字 · 已读 ${percent}%<br>`
-    + `${book.lastReadAt ? `上次阅读：${new Date(book.lastReadAt).toLocaleString('zh-CN')}` : '尚未阅读'}`;
+  meta.innerHTML = grid
+    ? `${fmtNum(book.chapterCount)} 章 · ${percent ? `已读 ${percent}%` : '未读'}`
+    : `${fmtNum(book.chapterCount)} 章 · ${fmtNum(book.charCount)} 字 · 已读 ${percent}%<br>`
+      + `${book.lastReadAt ? `上次阅读：${new Date(book.lastReadAt).toLocaleString('zh-CN')}` : '尚未阅读'}`;
   main.appendChild(meta);
 
   const bar = el('div', 'book-progress');
@@ -335,97 +512,156 @@ function makeBookCard(book) {
   bar.appendChild(inner);
   main.appendChild(bar);
 
-  const actions = el('div', 'book-actions');
-  const readBtn = el('button', 'primary-btn', book.progress && book.lastReadAt ? '继续阅读' : '开始阅读');
-  readBtn.addEventListener('click', (e) => { e.stopPropagation(); openBook(book.id); });
-  const catBtn = el('button', 'ghost-btn', '分类');
-  catBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const next = prompt(`把《${book.title}》放到哪个分类？`, bookCategory(book));
-    if (next == null) return;
-    book.category = next.trim() === UNCATEGORIZED ? '' : next.trim();
-    await updateBook(book);
-    await refreshShelf();
-    toast(`已移动到「${bookCategory(book)}」`);
+  if (!grid) {
+    const actions = el('div', 'book-actions');
+    const readBtn = el('button', 'primary-btn', book.lastReadAt ? '继续阅读' : '开始阅读');
+    readBtn.addEventListener('click', (e) => { e.stopPropagation(); openBook(book.id); });
+    const catBtn = el('button', 'ghost-btn', '分类');
+    catBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      // eslint-disable-next-line no-alert
+      const next = prompt(`把《${book.title}》放到哪个分类？`, bookCategory(book));
+      if (next == null) return;
+      book.category = next.trim() === UNCATEGORIZED ? '' : next.trim();
+      await updateBook(book);
+      await refreshShelf();
+      toast(`已移动到「${bookCategory(book)}」`);
+    });
+    const delBtn = el('button', 'ghost-btn danger', '删除');
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      // eslint-disable-next-line no-alert
+      if (!confirm(`确定要从书架删除《${book.title}》吗？`)) return;
+      await deleteBook(book.id);
+      if (state.book && state.book.id === book.id) showShelf();
+      else refreshShelf();
+      toast('已删除');
+    });
+    actions.append(readBtn, catBtn, delBtn);
+    main.appendChild(actions);
+  }
+
+  card.addEventListener('click', () => {
+    if (selecting()) togglePick(book);
+    else openBook(book.id);
   });
-  const delBtn = el('button', 'ghost-btn danger', '删除');
-  delBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (!confirm(`确定要从书架删除《${book.title}》吗？`)) return;
-    await deleteBook(book.id);
-    if (state.book && state.book.id === book.id) showShelf();
-    else refreshShelf();
-    toast('已删除');
-  });
-  actions.append(readBtn, catBtn, delBtn);
-  main.appendChild(actions);
-  card.addEventListener('click', () => openBook(book.id));
   return card;
 }
 
-function renderShelf() {
+function filteredBooks() {
   const query = ($('shelf-search').value || '').trim().toLowerCase();
-  const activeCat = state.settings.shelfCategory || '';
-  const grid = $('book-grid');
-  grid.innerHTML = '';
-
-  // 分类筛选条
-  const bar = $('category-bar');
-  bar.innerHTML = '';
-  const cats = allCategories();
-  if (cats.length > 1) {
-    const all = el('button', `cat-chip${activeCat ? '' : ' active'}`);
-    all.innerHTML = `全部<span class="n">${state.books.length}</span>`;
-    all.addEventListener('click', () => {
-      state.settings.shelfCategory = '';
-      saveSettings(state.settings);
-      renderShelf();
-    });
-    bar.appendChild(all);
-    for (const [name, count] of cats) {
-      const chip = el('button', `cat-chip${activeCat === name ? ' active' : ''}`);
-      chip.innerHTML = `${escapeHtml(name)}<span class="n">${count}</span>`;
-      chip.addEventListener('click', () => {
-        state.settings.shelfCategory = activeCat === name ? '' : name;
-        saveSettings(state.settings);
-        renderShelf();
-      });
-      bar.appendChild(chip);
-    }
-  }
-
+  const category = state.settings.shelfCategory || '';
+  const status = state.shelf.status || 'all';
   let books = state.books;
-  if (activeCat) books = books.filter((b) => bookCategory(b) === activeCat);
+  if (status !== 'all') books = books.filter((b) => readStatus(b) === status);
+  if (category) books = books.filter((b) => bookCategory(b) === category);
   if (query) {
     books = books.filter((b) => b.title.toLowerCase().includes(query)
       || bookCategory(b).toLowerCase().includes(query));
   }
-  books = sortBooks(books);
+  return sortBooks(books);
+}
 
+function renderSide() {
+  const side = $('shelf-side');
+  side.innerHTML = '';
+  const status = state.shelf.status || 'all';
+  const activeCat = state.settings.shelfCategory || '';
+
+  const statusGroup = el('div', 'side-group');
+  statusGroup.appendChild(el('div', 'side-title', '阅读状态'));
+  const counts = { all: state.books.length, reading: 0, unread: 0, done: 0 };
+  for (const book of state.books) counts[readStatus(book)] += 1;
+  for (const key of ['all', 'reading', 'unread', 'done']) {
+    const item = el('div', `side-item${status === key ? ' active' : ''}`);
+    item.dataset.status = key;
+    item.append(el('span', 'name', STATUS_LABELS[key]), el('span', 'n', String(counts[key])));
+    item.addEventListener('click', () => {
+      state.shelf.status = key;
+      state.shelf.page = 1;
+      renderShelf();
+    });
+    statusGroup.appendChild(item);
+  }
+  side.appendChild(statusGroup);
+
+  const cats = allCategories();
+  const catGroup = el('div', 'side-group');
+  catGroup.appendChild(el('div', 'side-title', `分类（${cats.length}）`));
+  const all = el('div', `side-item${activeCat ? '' : ' active'}`);
+  all.append(el('span', 'name', '全部分类'), el('span', 'n', String(state.books.length)));
+  all.addEventListener('click', () => {
+    state.settings.shelfCategory = '';
+    saveSettings(state.settings);
+    state.shelf.page = 1;
+    renderShelf();
+  });
+  catGroup.appendChild(all);
+  for (const [name, count] of cats) {
+    const item = el('div', `side-item${activeCat === name ? ' active' : ''}`);
+    item.dataset.category = name;
+    item.append(el('span', 'name', name), el('span', 'n', String(count)));
+    item.addEventListener('click', () => {
+      state.settings.shelfCategory = activeCat === name ? '' : name;
+      saveSettings(state.settings);
+      state.shelf.page = 1;
+      renderShelf();
+    });
+    catGroup.appendChild(item);
+  }
+  side.appendChild(catGroup);
+}
+
+function renderPager(total, pageSize) {
+  const pager = $('pager');
+  const pages = Math.ceil(total / pageSize);
+  pager.innerHTML = '';
+  pager.classList.toggle('hidden', pages <= 1);
+  if (pages <= 1) return;
+  const page = state.shelf.page;
+  const prev = el('button', 'ghost-btn', '上一页');
+  prev.disabled = page <= 1;
+  prev.addEventListener('click', () => { state.shelf.page -= 1; renderShelf(); window.scrollTo({ top: 0 }); });
+  const next = el('button', 'ghost-btn', '下一页');
+  next.disabled = page >= pages;
+  next.addEventListener('click', () => { state.shelf.page += 1; renderShelf(); window.scrollTo({ top: 0 }); });
+  pager.append(prev, el('span', 'info', `第 ${page} / ${pages} 页`), next);
+}
+
+function renderShelf() {
+  const view = state.settings.shelfView || 'grid';
+  const grid = $('book-grid');
+  grid.className = `book-grid ${view === 'grid' ? 'grid-view' : 'list-view'}`;
+  $('view-toggle').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  document.body.classList.toggle('shelf-selecting', selecting());
+  $('btn-select-mode').textContent = selecting() ? '退出批量' : '批量管理';
+
+  renderSide();
+  $('category-bar').innerHTML = '';    // 分类改到侧栏，这里留空
+
+  const books = filteredBooks();
+  const pageSize = PAGE_SIZE[view] || 60;
+  const pages = Math.max(1, Math.ceil(books.length / pageSize));
+  if (state.shelf.page > pages) state.shelf.page = pages;
+  const start = (state.shelf.page - 1) * pageSize;
+  const pageBooks = books.slice(start, start + pageSize);
+
+  const scope = state.settings.shelfCategory || STATUS_LABELS[state.shelf.status || 'all'];
   $('shelf-count').textContent = state.books.length
-    ? `共 ${state.books.length} 本${books.length !== state.books.length ? `，当前显示 ${books.length} 本` : ''}`
+    ? `共 ${state.books.length} 本${books.length !== state.books.length ? `，${scope} ${books.length} 本` : ''}`
     : '';
   $('shelf-empty').classList.toggle('hidden', state.books.length > 0);
 
-  // 不筛选、不搜索且有多个分类时，按分类分组显示
-  const grouped = !activeCat && !query && cats.length > 1;
-  if (grouped) {
-    for (const [name] of cats) {
-      const inCat = sortBooks(state.books.filter((b) => bookCategory(b) === name));
-      if (!inCat.length) continue;
-      const title = el('h3', 'shelf-group-title', `${name}（${inCat.length}）`);
-      grid.appendChild(title);
-      title.style.gridColumn = '1 / -1';
-      for (const book of inCat) grid.appendChild(makeBookCard(book));
-    }
-  } else {
-    for (const book of books) grid.appendChild(makeBookCard(book));
-    if (!books.length && state.books.length) {
-      const tip = el('p', 'empty-tip', '没有匹配的书');
-      tip.style.gridColumn = '1 / -1';
-      grid.appendChild(tip);
-    }
+  grid.innerHTML = '';
+  for (const book of pageBooks) grid.appendChild(makeBookCard(book));
+  if (!pageBooks.length && state.books.length) {
+    const tip = el('p', 'empty-tip', '这里没有符合条件的书');
+    tip.style.gridColumn = '1 / -1';
+    grid.appendChild(tip);
   }
+  renderPager(books.length, pageSize);
+  renderBulkBar();
+  loadCoversFor(pageBooks);
 }
 
 function showShelf() {
@@ -1706,13 +1942,38 @@ function bindEvents() {
   let shelfSearchTimer = null;
   $('shelf-search').addEventListener('input', () => {
     clearTimeout(shelfSearchTimer);
-    shelfSearchTimer = setTimeout(renderShelf, 150);
+    shelfSearchTimer = setTimeout(() => { state.shelf.page = 1; renderShelf(); }, 150);
   });
   $('shelf-sort').addEventListener('change', (e) => {
     state.settings.shelfSort = e.target.value;
     saveSettings(state.settings);
+    state.shelf.page = 1;
     renderShelf();
   });
+  $('view-toggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-view]');
+    if (!btn) return;
+    state.settings.shelfView = btn.dataset.view;
+    saveSettings(state.settings);
+    state.shelf.page = 1;
+    renderShelf();
+  });
+  $('btn-select-mode').addEventListener('click', () => {
+    if (selecting()) exitSelectMode();
+    else { state.shelf.selecting = true; renderShelf(); }
+  });
+  $('bulk-exit').addEventListener('click', exitSelectMode);
+  $('bulk-none').addEventListener('click', () => { state.shelf.picked.clear(); renderShelf(); });
+  $('bulk-all').addEventListener('click', () => {
+    document.querySelectorAll('#book-grid .book-card').forEach((card) => state.shelf.picked.add(card.dataset.id));
+    renderShelf();
+  });
+  $('bulk-category').addEventListener('click', bulkSetCategory);
+  $('bulk-delete').addEventListener('click', bulkDelete);
+  $('btn-tidy').addEventListener('click', () => { renderTidyOptions(); showModal('tidy-modal'); });
+  $('tidy-cancel').addEventListener('click', () => hideModal('tidy-modal'));
+  $('tidy-close').addEventListener('click', () => hideModal('tidy-modal'));
+  $('tidy-apply').addEventListener('click', applyTidy);
 
   $('cover-input').addEventListener('change', (e) => {
     const file = e.target.files && e.target.files[0];
@@ -1887,7 +2148,7 @@ function bindEvents() {
     if (e.key === 'Escape') {
       closePanels(); hideSelPop();
       hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal');
-      hideModal('error-modal'); hideModal('ocr-modal');
+      hideModal('error-modal'); hideModal('ocr-modal'); hideModal('tidy-modal');
       return;
     }
     if (!state.book) return;
