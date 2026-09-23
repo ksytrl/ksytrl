@@ -425,6 +425,7 @@ export function readMobi(buffer) {
 export async function readAnyFile(file, options = {}) {
   const buffer = await file.arrayBuffer();
   const ext = extOf(file.name);
+  if (options.onStage) options.onStage('parse', ext, buffer.byteLength);
   const base = { buffer: null, native: null, confident: true, encoding: 'utf-8' };
 
   if (ext === 'pdf') {
@@ -440,7 +441,7 @@ export async function readAnyFile(file, options = {}) {
     };
   }
   if (ext === 'epub') {
-    const book = await parseEpub(buffer);
+    const book = await parseEpub(buffer, { onProgress: options.onProgress });
     if (!book.chapters.length) throw new Error('这个 EPUB 里没有解析出正文，可能带 DRM 或文件损坏');
     return {
       ...base,

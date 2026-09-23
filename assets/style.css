@@ -488,3 +488,54 @@ html[data-theme="night"] .book-media img, html[data-theme="dark"] .book-media im
 }
 .lightbox img { max-width: 96vw; max-height: 88vh; object-fit: contain; }
 .lightbox-caption { color: #ddd; font-size: 13px; margin-top: 10px; }
+
+/* ===== 动画进度条：遮罩按 scaleX 收缩 + 反向滚动的条纹（都走合成器） ===== */
+.nr-bar {
+  position: relative; height: 10px; border-radius: 999px; overflow: hidden;
+  background: var(--surface-2); margin: 12px 0 8px;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.08);
+}
+.nr-ribs {
+  position: absolute; top: 0; bottom: 0; left: 0; right: -24px;
+  background-color: var(--accent);
+  background-image: linear-gradient(135deg,
+    rgba(255,255,255,.28) 25%, transparent 25%, transparent 50%,
+    rgba(255,255,255,.28) 50%, rgba(255,255,255,.28) 75%, transparent 75%);
+  background-size: 24px 24px;
+  animation: nr-ribs .75s linear infinite;
+  will-change: transform;
+}
+/* 条纹往左走（和进度方向相反），视觉上显得更快 */
+@keyframes nr-ribs { from { transform: translateX(0); } to { transform: translateX(-24px); } }
+.nr-cover {
+  position: absolute; inset: 0; background: var(--surface-2);
+  transform-origin: right center; transform: scaleX(1);
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nr-ribs { animation: none; }
+}
+
+/* ===== 全局加载层 ===== */
+.loader {
+  position: fixed; inset: 0; z-index: 110; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(0,0,0,.28); backdrop-filter: blur(2px);
+  animation: loader-in .18s ease-out;
+}
+.loader.leaving { opacity: 0; transition: opacity .2s; }
+@keyframes loader-in { from { opacity: 0; } to { opacity: 1; } }
+.loader-card {
+  width: min(560px, 100%); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; box-shadow: var(--shadow); padding: 18px 20px 16px;
+}
+.loader-head { display: flex; align-items: baseline; gap: 10px; }
+.loader-head strong { flex: 1; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loader-pct { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 700; color: var(--accent); }
+.loader-stage { font-size: 13px; color: var(--text); min-height: 1.4em; }
+.loader-tip { font-size: 12px; color: var(--text-dim); margin-top: 4px; min-height: 1.4em; }
+.loader-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.loader-foot .grow { flex: 1; }
+.loader-foot button, .small-btn { font-size: 12px; padding: 6px 10px; }
+.loader-game { margin-top: 12px; display: flex; justify-content: center; }
+.ink-runner { border-radius: 10px; background: var(--bg); outline: none; touch-action: manipulation; }
+.ink-runner:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); }

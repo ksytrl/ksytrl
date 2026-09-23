@@ -202,7 +202,7 @@ export async function openZip(buffer) {
   }
 }
 
-export async function parseEpub(buffer) {
+export async function parseEpub(buffer, options = {}) {
   const zip = await openZip(buffer);
   const container = await zip.text('META-INF/container.xml');
   const rootfileRe = tagRe('rootfile', '[^>]*>');
@@ -290,7 +290,10 @@ export async function parseEpub(buffer) {
 
   const chapters = [];
   const mediaRegistry = new Map();
+  let docIndex = 0;
   for (const doc of docs) {
+    docIndex += 1;
+    if (options.onProgress) options.onProgress(docIndex, docs.length, 'epub');
     const rawHtml = await zip.text(doc.href);
     if (rawHtml == null) continue;
     // 图片 / 视频先换成占位标记，再转文本，否则会跟着标签一起被剥掉

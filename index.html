@@ -394,8 +394,10 @@
   <div class="modal-card narrow">
     <div class="modal-head"><strong id="batch-title">正在批量导入</strong></div>
     <div class="modal-body">
-      <div class="book-progress"><i id="batch-bar"></i></div>
+      <div id="batch-bar"></div>
       <p class="muted small" id="batch-status">准备中…</p>
+      <button class="ghost-btn small-btn" id="batch-play">等得无聊？玩一局「墨点跳跳」</button>
+      <div class="loader-game hidden" id="batch-game"></div>
       <ol class="batch-list" id="batch-list"></ol>
     </div>
     <div class="modal-foot">
@@ -464,8 +466,10 @@
       </div>
       <div class="field"><label for="ocr-range">页码范围（留空＝全部；可写 1-20 或 1,5,8-10）</label>
         <input type="text" id="ocr-range" placeholder="留空识别全部页"></div>
-      <div class="book-progress"><i id="ocr-bar"></i></div>
+      <div id="ocr-bar"></div>
       <p class="muted small" id="ocr-status">识别是在你自己电脑上跑的，不会上传文件；每页大概几秒钟。</p>
+      <button class="ghost-btn small-btn hidden" id="ocr-play">等得无聊？玩一局「墨点跳跳」</button>
+      <div class="loader-game hidden" id="ocr-game"></div>
       <pre class="preview-text hidden" id="ocr-preview"></pre>
     </div>
     <div class="modal-foot">
@@ -474,6 +478,25 @@
       <button class="ghost-btn" id="ocr-cancel">取消</button>
       <button class="primary-btn" id="ocr-start">开始识别</button>
       <button class="primary-btn hidden" id="ocr-use">用识别结果导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 全局加载层 ============ -->
+<div class="loader hidden" id="loader" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-live="polite">
+  <div class="loader-card">
+    <div class="loader-head">
+      <strong id="loader-title">正在处理</strong>
+      <span class="loader-pct" id="loader-pct">0%</span>
+    </div>
+    <div id="loader-bar"></div>
+    <div class="loader-stage" id="loader-stage">准备中…</div>
+    <div class="loader-tip" id="loader-tip"></div>
+    <div class="loader-game hidden" id="loader-game"></div>
+    <div class="loader-foot">
+      <button class="ghost-btn hidden" id="loader-play">等得无聊？玩一局「墨点跳跳」</button>
+      <div class="grow"></div>
+      <button class="primary-btn hidden" id="loader-done">加载好了，去看书</button>
     </div>
   </div>
 </div>

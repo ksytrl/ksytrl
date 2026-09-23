@@ -24,8 +24,11 @@ import {
   isMediaLine, mediaKeyOf, describeMediaTokens, mediaKind,
 } from './media.js';
 import { generateCover, fitCover } from './cover.js';
+import { createLoader, createProgressBar, nextPaint } from './loader.js';
+import { createInkRunner } from './wait-game.js';
+import { createTextEngine } from './text-engine.js';
 
-const APP_VERSION = '1.10.0';   // 显示在阅读设置里，方便确认用的是哪一版
+const APP_VERSION = '1.11.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -202,6 +205,43 @@ function importTips(fileName) {
   return ['可以试试换一种编码，或者把文件另存为 UTF-8 的 TXT 再导入'];
 }
 function hideModal(id) { $(id).classList.add('hidden'); }
+
+/* =========================================================
+ * 加载进度条 + 等待小游戏
+ * =======================================================*/
+let loading = null;       // 全局加载层（main 里初始化）
+let engine = null;        // 清洗 / 分章引擎（优先在 Web Worker 里跑）
+const bars = {};          // 批量导入、OCR 用的进度条
+
+function mountGame(boxId, progressFn) {
+  const box = $(boxId);
+  box.classList.remove('hidden');
+  if (!box.__game) createInkRunner(box, { progress: progressFn });
+  const canvas = box.querySelector('canvas');
+  if (canvas) canvas.focus({ preventScroll: true });
+  return box.__game;
+}
+
+function unmountGame(boxId) {
+  const box = $(boxId);
+  if (box.__game) box.__game.destroy();
+  box.__game = null;
+  box.classList.add('hidden');
+}
+
+/** 按文件类型和大小估一下解析要多久，用来决定进度条蠕动的速度 */
+function estimateParseMs(ext, bytes) {
+  if (ext === 'pdf') return Math.max(600, bytes / 1500);
+  if (ext === 'epub') return Math.max(400, bytes / 6000);
+  if (['mobi', 'azw', 'azw3', 'prc', 'docx'].includes(ext)) return Math.max(400, bytes / 20000);
+  return Math.max(200, bytes / 60000);
+}
+
+const PARSE_LABELS = {
+  pdf: '解析 PDF，提取文字和插图…',
+  epub: '解压 EPUB，读取章节与插图…',
+  txt: '识别文字编码…',
+};
 
 /* =========================================================
  * 书架：分类侧栏 / 封面墙 / 搜索排序 / 批量管理 / 智能整理
@@ -759,9 +799,8 @@ function buildRuleList(activeIds) {
   }
 }
 
-function updateRuleCounts(text) {
-  const stats = analyzeRules(text, Number($('opt-maxTitle').value) || 40);
-  for (const s of stats) {
+function updateRuleCounts(stats) {
+  for (const s of stats || []) {
     const label = $('rule-list').querySelector(`[data-rule-id="${s.id}"] .count`);
     if (label) label.textContent = s.count ? `命中 ${s.count}` : '未命中';
   }
@@ -772,51 +811,49 @@ let previewTimer = null;
 function schedulePreview() {
   clearTimeout(previewTimer);
   $('import-status').textContent = '正在分析…';
-  previewTimer = setTimeout(runPreview, 180);
+  previewTimer = setTimeout(() => runPreview(), 180);
 }
 
-function runPreview() {
+let previewSeq = 0;
+
+/**
+ * 清洗 + 分章并刷新预览。重活在后台线程里做，界面不会卡。
+ * @param {{autoRules?: boolean, onProgress?: Function}} opts
+ *   autoRules=true：新导入的书，顺便自动挑分章规则
+ */
+async function runPreview(opts = {}) {
   const pending = state.pending;
   if (!pending) return;
+  const seq = ++previewSeq;
   const cleanOpts = collectCleanOptions();
   const splitOpts = collectSplitOptions();
-  const useNative = pending.native && $('opt-source').value === 'native';
+  const useNative = !!(pending.native && $('opt-source').value === 'native');
+  $('import-status').textContent = '正在分析…';
 
-  let text;
-  let stats;
-  let chapters;
-  let usedFallback = false;
-  let repair = { inserted: 0, filled: [], stillMissing: [] };
-
-  if (useNative) {
-    // 电子书自带目录：逐章清洗，章节结构保持不变
-    const cleanedChapters = pending.native.map((c) => {
-      const res = cleanText(c.content, cleanOpts, splitOpts);
-      return { title: cleanBookTitle(c.title) === c.title ? c.title : c.title, content: res.text, stats: res.stats };
-    });
-    chapters = cleanedChapters.map((c) => ({
-      title: c.title,
-      level: 2,
-      content: c.content,
-      charCount: c.content.replace(/\s/g, '').length,
-    }));
-    stats = cleanedChapters.reduce((acc, c) => {
-      Object.keys(acc).forEach((k) => { acc[k] += c.stats[k] || 0; });
-      return acc;
-    }, {
-      originalChars: 0, originalLines: 0, urlsRemoved: 0, adLines: 0, garbledLines: 0,
-      mojibakeFixed: 0, mergedLines: 0, blankLinesRemoved: 0, finalChars: 0, finalLines: 0,
-    });
-    text = chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n');
-  } else {
-    const cleaned = cleanText(pending.raw, cleanOpts, splitOpts);
-    text = cleaned.text;
-    stats = cleaned.stats;
-    const split = splitChapters(text, splitOpts);
-    chapters = split.chapters;
-    usedFallback = split.usedFallback;
-    repair = split.repair || repair;
+  let result;
+  try {
+    result = await engine.analyze({
+      raw: pending.raw,
+      native: useNative ? pending.native : null,
+      useNative,
+      cleanOpts,
+      splitOpts,
+      autoRules: !!opts.autoRules,
+    }, opts.onProgress);
+  } catch (err) {
+    if (seq === previewSeq) $('import-status').textContent = `分析失败：${err.message}`;
+    return;
   }
+  // 用户在分析期间又改了选项 / 关掉了窗口：丢弃过时的结果
+  if (seq !== previewSeq || state.pending !== pending) return;
+
+  if (opts.autoRules) {
+    buildRuleList(result.ruleIds);
+    splitOpts.ruleIds = result.ruleIds;
+  }
+  const {
+    text, stats, chapters, usedFallback, repair,
+  } = result;
 
   pending.clean = text;
   pending.chapters = chapters;
@@ -864,10 +901,10 @@ function runPreview() {
     repairBox.textContent = splitOpts.repairMissing ? '章节号连续，没有发现漏掉的章。' : '';
   }
 
-  updateRuleCounts(text);
+  updateRuleCounts(result.ruleStats);
 }
 
-function openImportModal(raw, name, encodingInfo, existing, native) {
+function openImportModal(raw, name, encodingInfo, existing, native) {  // eslint-disable-line consistent-return
   state.pending = {
     raw,
     name,
@@ -915,16 +952,20 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
       : '粘贴导入的文本无需选择编码')
     : `${kindLabel} 文件已解析为文本${viaNote}，无需选择编码`;
 
-  const suggested = existing && existing.splitOptions && existing.splitOptions.ruleIds.length
+  const known = existing && existing.splitOptions && existing.splitOptions.ruleIds.length
     ? existing.splitOptions.ruleIds
-    : (suggestRuleIds(raw) .length ? suggestRuleIds(raw) : DEFAULT_SPLIT_OPTIONS.ruleIds);
+    : null;
   fillOptionsUI(
     existing ? existing.cleanOptions : CLEAN_DEFAULTS,
-    { ...DEFAULT_SPLIT_OPTIONS, ...(existing ? existing.splitOptions : {}), ruleIds: suggested },
+    { ...DEFAULT_SPLIT_OPTIONS, ...(existing ? existing.splitOptions : {}), ruleIds: known || DEFAULT_SPLIT_OPTIONS.ruleIds },
   );
   showModal('import-modal');
-  runPreview();
+  // 返回 Promise，调用方可以等分析完成（并拿到进度）
+  return runPreview({ autoRules: !known, onProgress: previewHooks.onProgress });
 }
+
+/** 导入流程给预览挂的进度回调（单本导入时接到加载层上） */
+const previewHooks = { onProgress: null };
 
 function bindImportInputs() {
   const ids = ['opt-removeUrls', 'opt-removeAds', 'opt-removeSeparators', 'opt-fixMojibake',
@@ -946,7 +987,7 @@ function bindImportInputs() {
     runPreview();
   });
 
-  $('btn-auto-detect').addEventListener('click', () => {
+  $('btn-auto-detect').addEventListener('click', async () => {
     const pending = state.pending;
     if (!pending) return;
     const ids2 = suggestRuleIds(pending.raw, Number($('opt-maxTitle').value) || 40);
@@ -955,7 +996,7 @@ function bindImportInputs() {
       return;
     }
     buildRuleList(ids2);
-    runPreview();
+    await runPreview();
     toast(`已选用：${ids2.join(' + ')}`);
   });
 
@@ -967,8 +1008,10 @@ function bindImportInputs() {
 async function confirmImport() {
   const pending = state.pending;
   if (!pending) return;
-  if (!pending.chapters || !pending.chapters.length) runPreview();
+  if (!pending.chapters || !pending.chapters.length) await runPreview();
   const title = ($('import-name').value || '未命名小说').trim();
+  loading.start(`正在把《${title}》放上书架`);
+  loading.stage('写入书架…', 0.7, Math.max(200, (pending.clean || '').length / 8000 + (pending.media || []).length * 40));
   const chapters = pending.chapters;
   const id = pending.bookId || newId();
   const existing = state.books.find((b) => b.id === id);
@@ -1000,6 +1043,7 @@ async function confirmImport() {
       nativeChapters: pending.native || null,
     });
   } catch (err) {
+    loading.fail();
     toast(`保存失败：${err && err.message ? err.message : err}`);
     return;
   }
@@ -1015,8 +1059,10 @@ async function confirmImport() {
 
   hideModal('import-modal');
   state.pending = null;
+  loading.stage('打开书…', 0.95, 300);
   await refreshShelf();
-  await openBook(id);
+  await openBook(id, { loader: false });
+  await loading.finish();
   toast(`《${title}》已导入，共 ${chapters.length} 章`);
 }
 
@@ -1063,8 +1109,8 @@ function askPdfPassword() {
   return prompt('这个 PDF 有密码保护，请输入打开密码：');
 }
 
-async function readBookFile(file) {
-  const info = await readAnyFile(file, { onPassword: askPdfPassword });
+async function readBookFile(file, hooks = {}) {
+  const info = await readAnyFile(file, { onPassword: askPdfPassword, ...hooks });
   return { ...info, buffer: info.buffer || null };
 }
 
@@ -1099,23 +1145,41 @@ async function handleFiles(files, opts = {}) {
   }
   if (skipped > 0) toast(`「${group.label}」栏只导入了 ${list.length} 个文件，忽略了 ${skipped} 个其它类型`);
   if (list.length === 1 && !opts.batch) {
+    const file = list[0];
+    const ext = extOf(file.name);
+    loading.start(`正在打开《${cleanBookTitle(file.name)}》`, { delayMs: file.size > 1e6 ? 0 : 250 });
+    loading.stage('读取文件…', 0.08, Math.max(150, file.size / 150000));
+    await nextPaint();   // 先把加载层画出来，再开始读文件
     try {
-      const info = await readBookFile(list[0]);
+      const info = await readBookFile(file, {
+        onStage: (step, fileExt, bytes) => {
+          loading.stage(PARSE_LABELS[fileExt] || '解析文件…', 0.64, estimateParseMs(fileExt, bytes));
+        },
+        onProgress: (i, n, kind) => {
+          loading.progress(i / n, kind === 'epub' ? `解析第 ${i} / ${n} 个章节文件…` : `解析第 ${i} / ${n} 页…`);
+        },
+      });
       if (!info.raw || !info.raw.replace(/\s/g, '')) {
-        const ocrAction = extOf(list[0].name) === 'pdf'
-          ? { label: '用 OCR 识别文字', run: () => openOcrModal(list[0]) }
-          : null;
-        showError(list[0].name, '这个文件里没有解析出可读的文字。', importTips(list[0].name), ocrAction);
+        loading.fail();
+        const ocrAction = ext === 'pdf' ? { label: '用 OCR 识别文字', run: () => openOcrModal(file) } : null;
+        showError(file.name, '这个文件里没有解析出可读的文字。', importTips(file.name), ocrAction);
         return;
       }
-      info.category = categoryFromPath(list[0]);
-      info.file = list[0];
-      openImportModal(info.raw, info.name, info, null, info.native);
+      info.category = categoryFromPath(file);
+      info.file = file;
+      // 清洗、分章在后台线程里跑，这里接它报上来的真实进度
+      loading.stage('清洗排版、识别章节…', 0.97, Math.max(300, info.raw.length / 1500));
+      await nextPaint();
+      previewHooks.onProgress = (p, label) => loading.progress(p, label);
+      try {
+        await openImportModal(info.raw, info.name, info, null, info.native);
+      } finally {
+        previewHooks.onProgress = null;
+      }
+      await loading.finish({ message: '准备好了' });
     } catch (err) {
-      const file = list[0];
-      const ocrAction = extOf(file.name) === 'pdf'
-        ? { label: '用 OCR 识别文字', run: () => openOcrModal(file) }
-        : null;
+      loading.fail();
+      const ocrAction = ext === 'pdf' ? { label: '用 OCR 识别文字', run: () => openOcrModal(file) } : null;
       showError(file.name, `读取失败：${err.message}`, importTips(file.name), ocrAction);
     }
     return;
@@ -1130,6 +1194,8 @@ async function batchImport(files) {
   $('batch-title').textContent = `批量导入 ${files.length} 个文件`;
   $('batch-done').classList.add('hidden');
   $('batch-cancel').classList.remove('hidden');
+  bars.batch.reset();
+  $('batch-play').classList.toggle('hidden', files.length < 3);
   const listEl = $('batch-list');
   listEl.innerHTML = '';
   const existing = await listBooks();
@@ -1141,21 +1207,29 @@ async function batchImport(files) {
     if (state.batchAbort) break;
     const file = files[i];
     $('batch-status').textContent = `(${i + 1}/${files.length}) 正在处理：${file.name}`;
-    $('batch-bar').style.width = `${((i / files.length) * 100).toFixed(1)}%`;
+    bars.batch.set(i / files.length, 300);
+    // 这一本还没处理完之前，朝下一格慢慢蠕动
+    bars.batch.creep((i + 0.92) / files.length, Math.max(900, estimateParseMs(extOf(file.name), file.size) * 3));
     try {
       /* eslint-disable no-await-in-loop */
       const info = await readBookFile(file);
       if (!info.raw || !info.raw.replace(/\s/g, '')) throw new Error('没有可读的文字');
 
-      const ruleIds = suggestRuleIds(info.raw);
-      const splitOpts = {
-        ...DEFAULT_SPLIT_OPTIONS,
-        ruleIds: ruleIds.length ? ruleIds : DEFAULT_SPLIT_OPTIONS.ruleIds,
-      };
-      const cleaned = cleanText(info.raw, CLEAN_DEFAULTS, splitOpts);
       const useNative = !!(info.native && info.native.length > 1);
-      const split = useNative ? null : splitChapters(cleaned.text, splitOpts);
-      const chapters = useNative ? nativeToChapters(info.native, CLEAN_DEFAULTS, splitOpts) : split.chapters;
+      const analysis = await engine.analyze({
+        raw: info.raw,
+        native: useNative ? info.native : null,
+        useNative,
+        cleanOpts: CLEAN_DEFAULTS,
+        splitOpts: DEFAULT_SPLIT_OPTIONS,
+        autoRules: true,
+      }, (p) => {
+        bars.batch.set((i + 0.1 + p * 0.85) / files.length, 200);
+      });
+      const splitOpts = { ...DEFAULT_SPLIT_OPTIONS, ruleIds: analysis.ruleIds };
+      const chapters = analysis.chapters;
+      const split = { repair: analysis.repair };
+      const cleaned = { text: analysis.text };
       const charCount = cleaned.text.replace(/\s/g, '').length;
 
       const dup = existing.find((b) => b.title === info.name && Math.abs((b.charCount || 0) - charCount) < 50);
@@ -1208,7 +1282,9 @@ async function batchImport(files) {
     /* eslint-enable no-await-in-loop */
   }
 
-  $('batch-bar').style.width = '100%';
+  bars.batch.set(1, 380);
+  const batchGame = $('batch-game').__game;
+  if (!batchGame || !(batchGame.running || batchGame.score > 0)) unmountGame('batch-game');
   $('batch-status').textContent = `完成：成功 ${ok} 本，跳过 ${skipped} 本，失败 ${failed} 本`;
   $('batch-cancel').classList.add('hidden');
   $('batch-done').classList.remove('hidden');
@@ -1251,11 +1327,17 @@ async function filesFromDataTransfer(dt) {
 /* =========================================================
  * 阅读（支持「一章一页」与「上下无缝滚动」两种模式）
  * =======================================================*/
-async function openBook(id) {
+async function openBook(id, opts = {}) {
+  const useLoader = opts.loader !== false;
   const meta = state.books.find((b) => b.id === id) || (await listBooks()).find((b) => b.id === id);
   if (!meta) { toast('书籍不存在'); return; }
+  if (useLoader) {
+    loading.start(`正在打开《${meta.title}》`);
+    loading.stage('读取正文…', 0.75, Math.max(150, (meta.charCount || 0) / 25000));
+  }
   const content = await getContent(id);
-  if (!content) { toast('正文数据丢失，请重新导入'); return; }
+  if (!content) { if (useLoader) loading.fail(); toast('正文数据丢失，请重新导入'); return; }
+  if (useLoader) loading.stage('排版…', 0.95, 250);
 
   releaseMediaUrls();
   state.mediaIndex = new Map();
@@ -1284,6 +1366,7 @@ async function openBook(id) {
   renderToc();
   const resumeRatio = meta.progress ? meta.progress.ratio : 0;
   renderReader(state.chapterIndex, resumeRatio);
+  if (useLoader) loading.finish();
   if (meta.lastReadAt && (state.chapterIndex > 0 || resumeRatio > 0.02)) {
     showResumeHint(state.chapterIndex, resumeRatio);
   } else {
@@ -2059,7 +2142,7 @@ function bindEvents() {
     e.target.value = '';
   });
   $('batch-cancel').addEventListener('click', () => { state.batchAbort = true; });
-  $('batch-done').addEventListener('click', () => hideModal('batch-modal'));
+  $('batch-done').addEventListener('click', () => { unmountGame('batch-game'); hideModal('batch-modal'); });
 
   $('btn-paste').addEventListener('click', () => showModal('paste-modal'));
   $('paste-cancel').addEventListener('click', () => hideModal('paste-modal'));
@@ -2127,8 +2210,8 @@ function bindEvents() {
     $('ocr-status').textContent = '正在停止……（当前这页识别完就停）';
   });
   $('ocr-use').addEventListener('click', useOcrResult);
-  $('ocr-cancel').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; hideModal('ocr-modal'); });
-  $('ocr-close').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; hideModal('ocr-modal'); });
+  $('ocr-cancel').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; unmountGame('ocr-game'); hideModal('ocr-modal'); });
+  $('ocr-close').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; unmountGame('ocr-game'); hideModal('ocr-modal'); });
   $('btn-ocr-again').addEventListener('click', () => {
     if (state.pending && state.pending.file) {
       hideModal('import-modal');
@@ -2435,7 +2518,9 @@ function openOcrModal(file) {
   state.ocr = { file, running: false, stop: false, result: null };
   $('ocr-file').textContent = `文件：${file.name}`;
   $('ocr-range').value = '';
-  $('ocr-bar').style.width = '0';
+  bars.ocr.reset();
+  unmountGame('ocr-game');
+  $('ocr-play').classList.add('hidden');
   $('ocr-status').textContent = '识别在你自己电脑上跑，不会上传文件；每页大概几秒钟，页数多可以先只识别前几页试试。';
   $('ocr-preview').classList.add('hidden');
   $('ocr-preview').textContent = '';
@@ -2450,6 +2535,7 @@ async function runOcr() {
   if (!task || task.running) return;
   task.running = true;
   task.stop = false;
+  $('ocr-play').classList.remove('hidden');
   $('ocr-start').classList.add('hidden');
   $('ocr-stop').classList.remove('hidden');
   $('ocr-use').classList.add('hidden');
@@ -2460,9 +2546,12 @@ async function runOcr() {
       scale: Number($('ocr-scale').value),
       range: $('ocr-range').value,
       shouldStop: () => task.stop,
-      onProgress: ({ done, total, message }) => {
-        const percent = total ? (done / total) * 100 : 0;
-        $('ocr-bar').style.width = `${percent.toFixed(1)}%`;
+      onProgress: ({ done, total, message, stage }) => {
+        if (total) {
+          bars.ocr.set(done / total, 300);
+          // 每页大约几秒，下一页识别完之前朝它慢慢蠕动
+          if (done < total) bars.ocr.creep((done + 0.9) / total, stage === 'init' ? 12000 : 9000);
+        }
         $('ocr-status').textContent = total
           ? `${message || ''}（${done} / ${total} 页）`
           : (message || '');
@@ -2485,6 +2574,10 @@ async function runOcr() {
     }
   } finally {
     task.running = false;
+    bars.ocr.set(task.result ? 1 : bars.ocr.value(), 300);
+    $('ocr-play').classList.add('hidden');
+    const ocrGame = $('ocr-game').__game;
+    if (!ocrGame || !(ocrGame.running || ocrGame.score > 0)) unmountGame('ocr-game');
     $('ocr-stop').classList.add('hidden');
     $('ocr-start').classList.remove('hidden');
     $('ocr-start').textContent = '重新识别';
@@ -2494,6 +2587,7 @@ async function runOcr() {
 function useOcrResult() {
   const task = state.ocr;
   if (!task || !task.result) return;
+  unmountGame('ocr-game');
   hideModal('ocr-modal');
   const name = cleanBookTitle(task.file.name);
   openImportModal(task.result.text, name, {
@@ -2520,24 +2614,38 @@ function downloadBlob(blob, filename) {
 }
 
 async function doExportBackup(includeText) {
-  toast(includeText ? '正在打包备份，书多的话要等一会…' : '正在导出进度与笔记…');
+  loading.start(includeText ? '正在打包完整备份' : '正在导出进度与笔记');
+  loading.stage('整理书架数据…', 0.85, Math.max(300, state.books.length * (includeText ? 120 : 10)));
   try {
-    const data = await exportBackup({ includeText });
+    const data = await exportBackup({
+      includeText,
+      onProgress: (i, n) => loading.progress(i / n, `已打包 ${i} / ${n} 本`),
+    });
+    loading.stage('生成文件…', 0.98, 300);
+    await nextPaint();
     const stamp = new Date().toISOString().slice(0, 10);
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     downloadBlob(blob, `清风阅读备份-${includeText ? '完整' : '进度笔记'}-${stamp}.json`);
     const size = (blob.size / 1024 / 1024).toFixed(2);
+    await loading.finish();
     toast(`已导出 ${data.books.length} 本书的备份（${size} MB）`);
   } catch (err) {
+    loading.fail();
     showError('', `导出失败：${err.message}`, ['书特别多时可以试试"只导进度笔记"']);
   }
 }
 
 async function doImportBackup(file) {
+  loading.start('正在恢复备份');
+  loading.stage('读取备份文件…', 0.3, Math.max(200, file.size / 200000));
   try {
     const text = await file.text();
+    loading.stage('解析备份…', 0.45, Math.max(200, file.size / 400000), { show: file.size > 2e6 });
+    await nextPaint();
     const data = JSON.parse(text);
+    loading.stage('写回书架…', 0.95, Math.max(300, (data.books || []).length * 150));
     const result = await importBackup(data);
+    await loading.finish();
     await refreshShelf();
     if (state.book) {
       state.marks = await getMarks(state.book.id).catch(() => state.marks);
@@ -2550,6 +2658,7 @@ async function doImportBackup(file) {
     if (result.skipped) parts.push(`跳过 ${result.skipped} 本（备份里没有正文且书架上没有）`);
     toast(parts.length ? parts.join('，') : '备份里没有可恢复的内容');
   } catch (err) {
+    loading.fail();
     showError(file.name, `恢复失败：${err.message}`, ['请选择由本应用导出的 .json 备份文件']);
   }
 }
@@ -2578,6 +2687,28 @@ function setupPwa() {
 }
 
 async function main() {
+  loading = createLoader({
+    root: $('loader'), bar: $('loader-bar'), pct: $('loader-pct'), title: $('loader-title'),
+    stage: $('loader-stage'), tip: $('loader-tip'), playBtn: $('loader-play'), done: $('loader-done'),
+    game: $('loader-game'),
+    onClose: () => unmountGame('loader-game'),
+  });
+  engine = createTextEngine();
+  bars.batch = createProgressBar($('batch-bar'));
+  bars.ocr = createProgressBar($('ocr-bar'));
+  $('loader-play').addEventListener('click', () => {
+    $('loader-play').classList.add('hidden');
+    mountGame('loader-game', () => loading.value());
+  });
+  $('loader-done').addEventListener('click', () => loading.close());
+  $('batch-play').addEventListener('click', () => {
+    $('batch-play').classList.add('hidden');
+    mountGame('batch-game', () => bars.batch.value());
+  });
+  $('ocr-play').addEventListener('click', () => {
+    $('ocr-play').classList.add('hidden');
+    mountGame('ocr-game', () => bars.ocr.value());
+  });
   applySettings();
   bindSettings();
   bindImportInputs();

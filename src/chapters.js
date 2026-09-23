@@ -120,12 +120,13 @@ export function looksLikeHeading(line, options) {
 export function analyzeRules(text, maxTitleLength = DEFAULT_SPLIT_OPTIONS.maxTitleLength) {
   const lines = text.split('\n');
   const counts = new Map(CHAPTER_RULES.map((r) => [r.id, 0]));
+  // 正则只编译一次（原来每一行都重新编译 8 条，大书几十万行时非常慢）
+  const compiled = CHAPTER_RULES.map((rule) => ({ id: rule.id, re: compile(rule.pattern, rule.flags) }));
   for (const raw of lines) {
     const line = raw.trim();
     if (!plausibleTitle(line, maxTitleLength)) continue;
-    for (const rule of CHAPTER_RULES) {
-      const re = compile(rule.pattern, rule.flags);
-      if (re && re.test(line)) counts.set(rule.id, counts.get(rule.id) + 1);
+    for (const rule of compiled) {
+      if (rule.re && rule.re.test(line)) counts.set(rule.id, counts.get(rule.id) + 1);
     }
   }
   return CHAPTER_RULES.map((r) => ({ id: r.id, name: r.name, count: counts.get(r.id) }));

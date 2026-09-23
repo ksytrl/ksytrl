@@ -18,6 +18,9 @@ import { splitSentences, TTS_RATES } from '../src/tts.js';
 import {
   isMediaLine, mediaKeyOf, describeMediaTokens, guessMime, mediaKind,
 } from '../src/media.js';
+import { analyzeText } from '../src/text-analyze.js';
+import { creepCeiling, creepDuration } from '../src/loader.js';
+import { hit, speedAt } from '../src/wait-game.js';
 
 const readBuffer = async (path) => {
   const buf = await readFile(new URL(path, import.meta.url));
@@ -321,6 +324,25 @@ group('书内图片与视频');
   check('同一张图多处引用只存一份', (chap2.content.match(/\[\[media:m2\]\]/g) || []).length === 1 && epub.media.filter((m) => m.alt === '林间小路').length === 1,
     JSON.stringify(chap2.content));
   check('data-src 之类的属性不会被误当成图片', !epub.media.some((m) => /ignore/.test(m.name || '')), '');
+}
+
+// ---------- 加载进度 & 等待小游戏 ----------
+{
+  const raw = Array.from({ length: 40 }, (_, i) => `第${i + 1}章 标题${i + 1}\n正文内容，www.example.com 这里有网址。\n再来一段话。`).join('\n');
+  const seen = [];
+  const res = analyzeText({ raw, cleanOpts: {}, splitOpts: {}, autoRules: true }, (p, label) => seen.push([p, label]));
+  check('后台分析：进度单调递增并以 100% 收尾',
+    seen.length >= 4 && seen.every((x, i) => i === 0 || x[0] >= seen[i - 1][0]) && seen[seen.length - 1][0] === 1,
+    JSON.stringify(seen));
+  check('后台分析：每一步都带阶段说明', seen.every((x) => typeof x[1] === 'string' && x[1].length > 0), JSON.stringify(seen));
+  check('后台分析：结果与分章一致', res.chapters.length === 40 && !/example\.com/.test(res.text) && Array.isArray(res.ruleIds),
+    `${res.chapters.length} ${res.ruleIds}`);
+  check('蠕动上限停在阶段终点之前', creepCeiling(0.2, 0.6) > 0.55 && creepCeiling(0.2, 0.6) < 0.6, creepCeiling(0.2, 0.6));
+  check('蠕动时长 = 预计 3 倍并有上下限', creepDuration(1000) === 3000 && creepDuration(10) === 900 && creepDuration(1e9) === 120000,
+    [creepDuration(1000), creepDuration(10), creepDuration(1e9)].join());
+  const a = { x: 0, y: 0, w: 20, h: 20 };
+  check('小游戏碰撞：擦边不算撞上、真撞上才算', !hit(a, { x: 12, y: 0, w: 20, h: 20 }) && hit(a, { x: 5, y: 5, w: 20, h: 20 }), '');
+  check('小游戏速度渐快但有上限', speedAt(0) === 230 && speedAt(10) > speedAt(0) && speedAt(999) === 520, speedAt(999));
 }
 
 console.log(results.join('\n'));

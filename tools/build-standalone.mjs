@@ -23,7 +23,11 @@ const MODULES = [
   'src/formats/pdf.js',
   'src/formats/readers.js',
   'src/formats/ocr.js',
+  'src/text-analyze.js',
+  'src/text-engine.js',
   'src/tts.js',
+  'src/loader.js',
+  'src/wait-game.js',
   'src/store.js',
   'src/app.js',
 ];
@@ -35,6 +39,13 @@ const VENDOR = [
   ['vendor-pdfjs-worker', 'vendor/pdfjs/pdf.worker.min.js'],
   ['vendor-tesseract', 'vendor/tesseract/tesseract.min.js'],
 ];
+
+// 后台线程（清洗 / 分章）：把它依赖的几个模块拼成一个普通脚本，运行时用 blob URL 起 Worker
+const WORKER_MODULES = ['src/media.js', 'src/chapters.js', 'src/cleaner.js', 'src/text-analyze.js', 'src/text-worker.js'];
+const workerSource = () => WORKER_MODULES
+  .map((file) => `/* ===== ${file} ===== */\n${stripModuleSyntax(read(file))}`)
+  .join('\n\n')
+  .replace(/<\/script/gi, '<\\/script');
 
 const vendorBlocks = () => VENDOR.map(([id, file]) => {
   const src = read(file).replace(/<\/script/gi, '<\\/script');
@@ -58,7 +69,7 @@ const html = read('index.html')
   .replace('<link rel="stylesheet" href="assets/style.css">', () => `<style>\n${read('assets/style.css')}\n</style>`)
   .replace(
     '<script type="module" src="src/app.js"></script>',
-    () => `${vendorBlocks()}\n<script>\n(function () {\n'use strict';\n${script}\n})();\n</scr` + `ipt>`,
+    () => `${vendorBlocks()}\n<script type="text/plain" id="text-worker-src">\n${workerSource()}\n</scr` + `ipt>\n<script>\n(function () {\n'use strict';\n${script}\n})();\n</scr` + `ipt>`,
   );
 
 mkdirSync(resolve(root, 'dist'), { recursive: true });

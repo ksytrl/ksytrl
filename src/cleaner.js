@@ -153,7 +153,7 @@ function estimateWrapWidth(lines) {
  * @param {object} splitOptions 分章选项（用于保护标题行不被合并 / 误删）
  * @returns {{text: string, stats: object}}
  */
-export function cleanText(raw, options = {}, splitOptions = {}) {
+export function cleanText(raw, options = {}, splitOptions = {}, onProgress = null) {
   const opts = { ...CLEAN_DEFAULTS, ...options };
   const splitOpts = { ...DEFAULT_SPLIT_OPTIONS, ...splitOptions };
   const compiled = compileRules({
@@ -187,7 +187,11 @@ export function cleanText(raw, options = {}, splitOptions = {}) {
 
   // ---- 逐行清洗 ----
   const cleaned = [];
+  const total = lines.length || 1;
+  let lineNo = 0;
   for (const original of lines) {
+    lineNo += 1;
+    if (onProgress && lineNo % 4000 === 0) onProgress((lineNo / total) * 0.75);
     let line = original;
 
     // 图片 / 视频占位标记：原样保留，不参与任何清洗规则
@@ -246,6 +250,7 @@ export function cleanText(raw, options = {}, splitOptions = {}) {
     const wrapWidth = estimateWrapWidth(cleaned);
     merged = [];
     for (let i = 0; i < cleaned.length; i += 1) {
+      if (onProgress && i % 6000 === 0) onProgress(0.75 + (i / (cleaned.length || 1)) * 0.2);
       const trimmed = cleaned[i].trim();
       if (!trimmed) {
         merged.push('');

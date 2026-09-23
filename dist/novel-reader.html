@@ -497,6 +497,57 @@ html[data-theme="night"] .book-media img, html[data-theme="dark"] .book-media im
 .lightbox img { max-width: 96vw; max-height: 88vh; object-fit: contain; }
 .lightbox-caption { color: #ddd; font-size: 13px; margin-top: 10px; }
 
+/* ===== 动画进度条：遮罩按 scaleX 收缩 + 反向滚动的条纹（都走合成器） ===== */
+.nr-bar {
+  position: relative; height: 10px; border-radius: 999px; overflow: hidden;
+  background: var(--surface-2); margin: 12px 0 8px;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.08);
+}
+.nr-ribs {
+  position: absolute; top: 0; bottom: 0; left: 0; right: -24px;
+  background-color: var(--accent);
+  background-image: linear-gradient(135deg,
+    rgba(255,255,255,.28) 25%, transparent 25%, transparent 50%,
+    rgba(255,255,255,.28) 50%, rgba(255,255,255,.28) 75%, transparent 75%);
+  background-size: 24px 24px;
+  animation: nr-ribs .75s linear infinite;
+  will-change: transform;
+}
+/* 条纹往左走（和进度方向相反），视觉上显得更快 */
+@keyframes nr-ribs { from { transform: translateX(0); } to { transform: translateX(-24px); } }
+.nr-cover {
+  position: absolute; inset: 0; background: var(--surface-2);
+  transform-origin: right center; transform: scaleX(1);
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nr-ribs { animation: none; }
+}
+
+/* ===== 全局加载层 ===== */
+.loader {
+  position: fixed; inset: 0; z-index: 110; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(0,0,0,.28); backdrop-filter: blur(2px);
+  animation: loader-in .18s ease-out;
+}
+.loader.leaving { opacity: 0; transition: opacity .2s; }
+@keyframes loader-in { from { opacity: 0; } to { opacity: 1; } }
+.loader-card {
+  width: min(560px, 100%); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; box-shadow: var(--shadow); padding: 18px 20px 16px;
+}
+.loader-head { display: flex; align-items: baseline; gap: 10px; }
+.loader-head strong { flex: 1; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loader-pct { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 700; color: var(--accent); }
+.loader-stage { font-size: 13px; color: var(--text); min-height: 1.4em; }
+.loader-tip { font-size: 12px; color: var(--text-dim); margin-top: 4px; min-height: 1.4em; }
+.loader-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.loader-foot .grow { flex: 1; }
+.loader-foot button, .small-btn { font-size: 12px; padding: 6px 10px; }
+.loader-game { margin-top: 12px; display: flex; justify-content: center; }
+.ink-runner { border-radius: 10px; background: var(--bg); outline: none; touch-action: manipulation; }
+.ink-runner:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); }
+
 </style>
 
 <meta name="theme-color" content="#9a6a3a">
@@ -886,8 +937,10 @@ html[data-theme="night"] .book-media img, html[data-theme="dark"] .book-media im
   <div class="modal-card narrow">
     <div class="modal-head"><strong id="batch-title">正在批量导入</strong></div>
     <div class="modal-body">
-      <div class="book-progress"><i id="batch-bar"></i></div>
+      <div id="batch-bar"></div>
       <p class="muted small" id="batch-status">准备中…</p>
+      <button class="ghost-btn small-btn" id="batch-play">等得无聊？玩一局「墨点跳跳」</button>
+      <div class="loader-game hidden" id="batch-game"></div>
       <ol class="batch-list" id="batch-list"></ol>
     </div>
     <div class="modal-foot">
@@ -956,8 +1009,10 @@ html[data-theme="night"] .book-media img, html[data-theme="dark"] .book-media im
       </div>
       <div class="field"><label for="ocr-range">页码范围（留空＝全部；可写 1-20 或 1,5,8-10）</label>
         <input type="text" id="ocr-range" placeholder="留空识别全部页"></div>
-      <div class="book-progress"><i id="ocr-bar"></i></div>
+      <div id="ocr-bar"></div>
       <p class="muted small" id="ocr-status">识别是在你自己电脑上跑的，不会上传文件；每页大概几秒钟。</p>
+      <button class="ghost-btn small-btn hidden" id="ocr-play">等得无聊？玩一局「墨点跳跳」</button>
+      <div class="loader-game hidden" id="ocr-game"></div>
       <pre class="preview-text hidden" id="ocr-preview"></pre>
     </div>
     <div class="modal-foot">
@@ -966,6 +1021,25 @@ html[data-theme="night"] .book-media img, html[data-theme="dark"] .book-media im
       <button class="ghost-btn" id="ocr-cancel">取消</button>
       <button class="primary-btn" id="ocr-start">开始识别</button>
       <button class="primary-btn hidden" id="ocr-use">用识别结果导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 全局加载层 ============ -->
+<div class="loader hidden" id="loader" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-live="polite">
+  <div class="loader-card">
+    <div class="loader-head">
+      <strong id="loader-title">正在处理</strong>
+      <span class="loader-pct" id="loader-pct">0%</span>
+    </div>
+    <div id="loader-bar"></div>
+    <div class="loader-stage" id="loader-stage">准备中…</div>
+    <div class="loader-tip" id="loader-tip"></div>
+    <div class="loader-game hidden" id="loader-game"></div>
+    <div class="loader-foot">
+      <button class="ghost-btn hidden" id="loader-play">等得无聊？玩一局「墨点跳跳」</button>
+      <div class="grow"></div>
+      <button class="primary-btn hidden" id="loader-done">加载好了，去看书</button>
     </div>
   </div>
 </div>
@@ -1046,9 +1120,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 !function(t,r){"object"==typeof exports&&"object"==typeof module?module.exports=r():"function"==typeof define&&define.amd?define([],r):"object"==typeof exports?exports.Tesseract=r():t.Tesseract=r()}(self,(()=>(()=>{var t={670:t=>{function r(t){return r="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},r(t)}t.exports=function(){return"undefined"!=typeof window&&"object"===r(window.process)&&"renderer"===window.process.type||!("undefined"==typeof process||"object"!==r(process.versions)||!process.versions.electron)||"object"===("undefined"==typeof navigator?"undefined":r(navigator))&&"string"==typeof navigator.userAgent&&navigator.userAgent.indexOf("Electron")>=0}},760:(t,r,e)=>{function n(t){return n="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},n(t)}var o=function(t){"use strict";var r,e=Object.prototype,o=e.hasOwnProperty,i=Object.defineProperty||function(t,r,e){t[r]=e.value},a="function"==typeof Symbol?Symbol:{},c=a.iterator||"@@iterator",u=a.asyncIterator||"@@asyncIterator",f=a.toStringTag||"@@toStringTag";function l(t,r,e){return Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}),t[r]}try{l({},"")}catch(t){l=function(t,r,e){return t[r]=e}}function s(t,r,e,n){var o=r&&r.prototype instanceof m?r:m,a=Object.create(o.prototype),c=new N(n||[]);return i(a,"_invoke",{value:P(t,e,c)}),a}function h(t,r,e){try{return{type:"normal",arg:t.call(r,e)}}catch(t){return{type:"throw",arg:t}}}t.wrap=s;var p="suspendedStart",y="suspendedYield",v="executing",d="completed",g={};function m(){}function b(){}function w(){}var x={};l(x,c,(function(){return this}));var L=Object.getPrototypeOf,O=L&&L(L(A([])));O&&O!==e&&o.call(O,c)&&(x=O);var E=w.prototype=m.prototype=Object.create(x);function S(t){["next","throw","return"].forEach((function(r){l(t,r,(function(t){return this._invoke(r,t)}))}))}function j(t,r){function e(i,a,c,u){var f=h(t[i],t,a);if("throw"!==f.type){var l=f.arg,s=l.value;return s&&"object"===n(s)&&o.call(s,"__await")?r.resolve(s.__await).then((function(t){e("next",t,c,u)}),(function(t){e("throw",t,c,u)})):r.resolve(s).then((function(t){l.value=t,c(l)}),(function(t){return e("throw",t,c,u)}))}u(f.arg)}var a;i(this,"_invoke",{value:function(t,n){function o(){return new r((function(r,o){e(t,n,r,o)}))}return a=a?a.then(o,o):o()}})}function P(t,r,e){var n=p;return function(o,i){if(n===v)throw new Error("Generator is already running");if(n===d){if("throw"===o)throw i;return G()}for(e.method=o,e.arg=i;;){var a=e.delegate;if(a){var c=k(a,e);if(c){if(c===g)continue;return c}}if("next"===e.method)e.sent=e._sent=e.arg;else if("throw"===e.method){if(n===p)throw n=d,e.arg;e.dispatchException(e.arg)}else"return"===e.method&&e.abrupt("return",e.arg);n=v;var u=h(t,r,e);if("normal"===u.type){if(n=e.done?d:y,u.arg===g)continue;return{value:u.arg,done:e.done}}"throw"===u.type&&(n=d,e.method="throw",e.arg=u.arg)}}}function k(t,e){var n=e.method,o=t.iterator[n];if(o===r)return e.delegate=null,"throw"===n&&t.iterator.return&&(e.method="return",e.arg=r,k(t,e),"throw"===e.method)||"return"!==n&&(e.method="throw",e.arg=new TypeError("The iterator does not provide a '"+n+"' method")),g;var i=h(o,t.iterator,e.arg);if("throw"===i.type)return e.method="throw",e.arg=i.arg,e.delegate=null,g;var a=i.arg;return a?a.done?(e[t.resultName]=a.value,e.next=t.nextLoc,"return"!==e.method&&(e.method="next",e.arg=r),e.delegate=null,g):a:(e.method="throw",e.arg=new TypeError("iterator result is not an object"),e.delegate=null,g)}function _(t){var r={tryLoc:t[0]};1 in t&&(r.catchLoc=t[1]),2 in t&&(r.finallyLoc=t[2],r.afterLoc=t[3]),this.tryEntries.push(r)}function T(t){var r=t.completion||{};r.type="normal",delete r.arg,t.completion=r}function N(t){this.tryEntries=[{tryLoc:"root"}],t.forEach(_,this),this.reset(!0)}function A(t){if(t){var e=t[c];if(e)return e.call(t);if("function"==typeof t.next)return t;if(!isNaN(t.length)){var n=-1,i=function e(){for(;++n<t.length;)if(o.call(t,n))return e.value=t[n],e.done=!1,e;return e.value=r,e.done=!0,e};return i.next=i}}return{next:G}}function G(){return{value:r,done:!0}}return b.prototype=w,i(E,"constructor",{value:w,configurable:!0}),i(w,"constructor",{value:b,configurable:!0}),b.displayName=l(w,f,"GeneratorFunction"),t.isGeneratorFunction=function(t){var r="function"==typeof t&&t.constructor;return!!r&&(r===b||"GeneratorFunction"===(r.displayName||r.name))},t.mark=function(t){return Object.setPrototypeOf?Object.setPrototypeOf(t,w):(t.__proto__=w,l(t,f,"GeneratorFunction")),t.prototype=Object.create(E),t},t.awrap=function(t){return{__await:t}},S(j.prototype),l(j.prototype,u,(function(){return this})),t.AsyncIterator=j,t.async=function(r,e,n,o,i){void 0===i&&(i=Promise);var a=new j(s(r,e,n,o),i);return t.isGeneratorFunction(e)?a:a.next().then((function(t){return t.done?t.value:a.next()}))},S(E),l(E,f,"Generator"),l(E,c,(function(){return this})),l(E,"toString",(function(){return"[object Generator]"})),t.keys=function(t){var r=Object(t),e=[];for(var n in r)e.push(n);return e.reverse(),function t(){for(;e.length;){var n=e.pop();if(n in r)return t.value=n,t.done=!1,t}return t.done=!0,t}},t.values=A,N.prototype={constructor:N,reset:function(t){if(this.prev=0,this.next=0,this.sent=this._sent=r,this.done=!1,this.delegate=null,this.method="next",this.arg=r,this.tryEntries.forEach(T),!t)for(var e in this)"t"===e.charAt(0)&&o.call(this,e)&&!isNaN(+e.slice(1))&&(this[e]=r)},stop:function(){this.done=!0;var t=this.tryEntries[0].completion;if("throw"===t.type)throw t.arg;return this.rval},dispatchException:function(t){if(this.done)throw t;var e=this;function n(n,o){return c.type="throw",c.arg=t,e.next=n,o&&(e.method="next",e.arg=r),!!o}for(var i=this.tryEntries.length-1;i>=0;--i){var a=this.tryEntries[i],c=a.completion;if("root"===a.tryLoc)return n("end");if(a.tryLoc<=this.prev){var u=o.call(a,"catchLoc"),f=o.call(a,"finallyLoc");if(u&&f){if(this.prev<a.catchLoc)return n(a.catchLoc,!0);if(this.prev<a.finallyLoc)return n(a.finallyLoc)}else if(u){if(this.prev<a.catchLoc)return n(a.catchLoc,!0)}else{if(!f)throw new Error("try statement without catch or finally");if(this.prev<a.finallyLoc)return n(a.finallyLoc)}}}},abrupt:function(t,r){for(var e=this.tryEntries.length-1;e>=0;--e){var n=this.tryEntries[e];if(n.tryLoc<=this.prev&&o.call(n,"finallyLoc")&&this.prev<n.finallyLoc){var i=n;break}}i&&("break"===t||"continue"===t)&&i.tryLoc<=r&&r<=i.finallyLoc&&(i=null);var a=i?i.completion:{};return a.type=t,a.arg=r,i?(this.method="next",this.next=i.finallyLoc,g):this.complete(a)},complete:function(t,r){if("throw"===t.type)throw t.arg;return"break"===t.type||"continue"===t.type?this.next=t.arg:"return"===t.type?(this.rval=this.arg=t.arg,this.method="return",this.next="end"):"normal"===t.type&&r&&(this.next=r),g},finish:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.finallyLoc===t)return this.complete(e.completion,e.afterLoc),T(e),g}},catch:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.tryLoc===t){var n=e.completion;if("throw"===n.type){var o=n.arg;T(e)}return o}}throw new Error("illegal catch attempt")},delegateYield:function(t,e,n){return this.delegate={iterator:A(t),resultName:e,nextLoc:n},"next"===this.method&&(this.arg=r),g}},t}("object"===n(t=e.nmd(t))?t.exports:{});try{regeneratorRuntime=o}catch(t){"object"===("undefined"==typeof globalThis?"undefined":n(globalThis))?globalThis.regeneratorRuntime=o:Function("r","regeneratorRuntime = r")(o)}},793:(t,r,e)=>{function n(t){return n="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},n(t)}function o(){"use strict";o=function(){return t};var t={},r=Object.prototype,e=r.hasOwnProperty,i=Object.defineProperty||function(t,r,e){t[r]=e.value},a="function"==typeof Symbol?Symbol:{},c=a.iterator||"@@iterator",u=a.asyncIterator||"@@asyncIterator",f=a.toStringTag||"@@toStringTag";function l(t,r,e){return Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}),t[r]}try{l({},"")}catch(t){l=function(t,r,e){return t[r]=e}}function s(t,r,e,n){var o=r&&r.prototype instanceof y?r:y,a=Object.create(o.prototype),c=new P(n||[]);return i(a,"_invoke",{value:O(t,e,c)}),a}function h(t,r,e){try{return{type:"normal",arg:t.call(r,e)}}catch(t){return{type:"throw",arg:t}}}t.wrap=s;var p={};function y(){}function v(){}function d(){}var g={};l(g,c,(function(){return this}));var m=Object.getPrototypeOf,b=m&&m(m(k([])));b&&b!==r&&e.call(b,c)&&(g=b);var w=d.prototype=y.prototype=Object.create(g);function x(t){["next","throw","return"].forEach((function(r){l(t,r,(function(t){return this._invoke(r,t)}))}))}function L(t,r){function o(i,a,c,u){var f=h(t[i],t,a);if("throw"!==f.type){var l=f.arg,s=l.value;return s&&"object"==n(s)&&e.call(s,"__await")?r.resolve(s.__await).then((function(t){o("next",t,c,u)}),(function(t){o("throw",t,c,u)})):r.resolve(s).then((function(t){l.value=t,c(l)}),(function(t){return o("throw",t,c,u)}))}u(f.arg)}var a;i(this,"_invoke",{value:function(t,e){function n(){return new r((function(r,n){o(t,e,r,n)}))}return a=a?a.then(n,n):n()}})}function O(t,r,e){var n="suspendedStart";return function(o,i){if("executing"===n)throw new Error("Generator is already running");if("completed"===n){if("throw"===o)throw i;return{value:void 0,done:!0}}for(e.method=o,e.arg=i;;){var a=e.delegate;if(a){var c=E(a,e);if(c){if(c===p)continue;return c}}if("next"===e.method)e.sent=e._sent=e.arg;else if("throw"===e.method){if("suspendedStart"===n)throw n="completed",e.arg;e.dispatchException(e.arg)}else"return"===e.method&&e.abrupt("return",e.arg);n="executing";var u=h(t,r,e);if("normal"===u.type){if(n=e.done?"completed":"suspendedYield",u.arg===p)continue;return{value:u.arg,done:e.done}}"throw"===u.type&&(n="completed",e.method="throw",e.arg=u.arg)}}}function E(t,r){var e=r.method,n=t.iterator[e];if(void 0===n)return r.delegate=null,"throw"===e&&t.iterator.return&&(r.method="return",r.arg=void 0,E(t,r),"throw"===r.method)||"return"!==e&&(r.method="throw",r.arg=new TypeError("The iterator does not provide a '"+e+"' method")),p;var o=h(n,t.iterator,r.arg);if("throw"===o.type)return r.method="throw",r.arg=o.arg,r.delegate=null,p;var i=o.arg;return i?i.done?(r[t.resultName]=i.value,r.next=t.nextLoc,"return"!==r.method&&(r.method="next",r.arg=void 0),r.delegate=null,p):i:(r.method="throw",r.arg=new TypeError("iterator result is not an object"),r.delegate=null,p)}function S(t){var r={tryLoc:t[0]};1 in t&&(r.catchLoc=t[1]),2 in t&&(r.finallyLoc=t[2],r.afterLoc=t[3]),this.tryEntries.push(r)}function j(t){var r=t.completion||{};r.type="normal",delete r.arg,t.completion=r}function P(t){this.tryEntries=[{tryLoc:"root"}],t.forEach(S,this),this.reset(!0)}function k(t){if(t){var r=t[c];if(r)return r.call(t);if("function"==typeof t.next)return t;if(!isNaN(t.length)){var n=-1,o=function r(){for(;++n<t.length;)if(e.call(t,n))return r.value=t[n],r.done=!1,r;return r.value=void 0,r.done=!0,r};return o.next=o}}return{next:_}}function _(){return{value:void 0,done:!0}}return v.prototype=d,i(w,"constructor",{value:d,configurable:!0}),i(d,"constructor",{value:v,configurable:!0}),v.displayName=l(d,f,"GeneratorFunction"),t.isGeneratorFunction=function(t){var r="function"==typeof t&&t.constructor;return!!r&&(r===v||"GeneratorFunction"===(r.displayName||r.name))},t.mark=function(t){return Object.setPrototypeOf?Object.setPrototypeOf(t,d):(t.__proto__=d,l(t,f,"GeneratorFunction")),t.prototype=Object.create(w),t},t.awrap=function(t){return{__await:t}},x(L.prototype),l(L.prototype,u,(function(){return this})),t.AsyncIterator=L,t.async=function(r,e,n,o,i){void 0===i&&(i=Promise);var a=new L(s(r,e,n,o),i);return t.isGeneratorFunction(e)?a:a.next().then((function(t){return t.done?t.value:a.next()}))},x(w),l(w,f,"Generator"),l(w,c,(function(){return this})),l(w,"toString",(function(){return"[object Generator]"})),t.keys=function(t){var r=Object(t),e=[];for(var n in r)e.push(n);return e.reverse(),function t(){for(;e.length;){var n=e.pop();if(n in r)return t.value=n,t.done=!1,t}return t.done=!0,t}},t.values=k,P.prototype={constructor:P,reset:function(t){if(this.prev=0,this.next=0,this.sent=this._sent=void 0,this.done=!1,this.delegate=null,this.method="next",this.arg=void 0,this.tryEntries.forEach(j),!t)for(var r in this)"t"===r.charAt(0)&&e.call(this,r)&&!isNaN(+r.slice(1))&&(this[r]=void 0)},stop:function(){this.done=!0;var t=this.tryEntries[0].completion;if("throw"===t.type)throw t.arg;return this.rval},dispatchException:function(t){if(this.done)throw t;var r=this;function n(e,n){return a.type="throw",a.arg=t,r.next=e,n&&(r.method="next",r.arg=void 0),!!n}for(var o=this.tryEntries.length-1;o>=0;--o){var i=this.tryEntries[o],a=i.completion;if("root"===i.tryLoc)return n("end");if(i.tryLoc<=this.prev){var c=e.call(i,"catchLoc"),u=e.call(i,"finallyLoc");if(c&&u){if(this.prev<i.catchLoc)return n(i.catchLoc,!0);if(this.prev<i.finallyLoc)return n(i.finallyLoc)}else if(c){if(this.prev<i.catchLoc)return n(i.catchLoc,!0)}else{if(!u)throw new Error("try statement without catch or finally");if(this.prev<i.finallyLoc)return n(i.finallyLoc)}}}},abrupt:function(t,r){for(var n=this.tryEntries.length-1;n>=0;--n){var o=this.tryEntries[n];if(o.tryLoc<=this.prev&&e.call(o,"finallyLoc")&&this.prev<o.finallyLoc){var i=o;break}}i&&("break"===t||"continue"===t)&&i.tryLoc<=r&&r<=i.finallyLoc&&(i=null);var a=i?i.completion:{};return a.type=t,a.arg=r,i?(this.method="next",this.next=i.finallyLoc,p):this.complete(a)},complete:function(t,r){if("throw"===t.type)throw t.arg;return"break"===t.type||"continue"===t.type?this.next=t.arg:"return"===t.type?(this.rval=this.arg=t.arg,this.method="return",this.next="end"):"normal"===t.type&&r&&(this.next=r),p},finish:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.finallyLoc===t)return this.complete(e.completion,e.afterLoc),j(e),p}},catch:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.tryLoc===t){var n=e.completion;if("throw"===n.type){var o=n.arg;j(e)}return o}}throw new Error("illegal catch attempt")},delegateYield:function(t,r,e){return this.delegate={iterator:k(t),resultName:r,nextLoc:e},"next"===this.method&&(this.arg=void 0),p}},t}function i(t,r,e,n,o,i,a){try{var c=t[i](a),u=c.value}catch(t){return void e(t)}c.done?r(u):Promise.resolve(u).then(n,o)}function a(t){return function(){var r=this,e=arguments;return new Promise((function(n,o){var a=t.apply(r,e);function c(t){i(a,n,o,c,u,"next",t)}function u(t){i(a,n,o,c,u,"throw",t)}c(void 0)}))}}var c=e(311),u=function(){var t=a(o().mark((function t(r,e,n){var i;return o().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:return t.next=2,c(e,1,n);case 2:return i=t.sent,t.abrupt("return",i.recognize(r).finally(a(o().mark((function t(){return o().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:return t.next=2,i.terminate();case 2:case"end":return t.stop()}}),t)})))));case 4:case"end":return t.stop()}}),t)})));return function(r,e,n){return t.apply(this,arguments)}}(),f=function(){var t=a(o().mark((function t(r,e){var n;return o().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:return t.next=2,c("osd",0,e);case 2:return n=t.sent,t.abrupt("return",n.detect(r).finally(a(o().mark((function t(){return o().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:return t.next=2,n.terminate();case 2:case"end":return t.stop()}}),t)})))));case 4:case"end":return t.stop()}}),t)})));return function(r,e){return t.apply(this,arguments)}}();t.exports={recognize:u,detect:f}},847:t=>{t.exports={TESSERACT_ONLY:0,LSTM_ONLY:1,TESSERACT_LSTM_COMBINED:2,DEFAULT:3}},711:t=>{t.exports={OSD_ONLY:"0",AUTO_OSD:"1",AUTO_ONLY:"2",AUTO:"3",SINGLE_COLUMN:"4",SINGLE_BLOCK_VERT_TEXT:"5",SINGLE_BLOCK:"6",SINGLE_LINE:"7",SINGLE_WORD:"8",CIRCLE_WORD:"9",SINGLE_CHAR:"10",SPARSE_TEXT:"11",SPARSE_TEXT_OSD:"12",RAW_LINE:"13"}},341:t=>{t.exports={workerBlobURL:!0,logger:function(){}}},5:t=>{t.exports={AFR:"afr",AMH:"amh",ARA:"ara",ASM:"asm",AZE:"aze",AZE_CYRL:"aze_cyrl",BEL:"bel",BEN:"ben",BOD:"bod",BOS:"bos",BUL:"bul",CAT:"cat",CEB:"ceb",CES:"ces",CHI_SIM:"chi_sim",CHI_TRA:"chi_tra",CHR:"chr",CYM:"cym",DAN:"dan",DEU:"deu",DZO:"dzo",ELL:"ell",ENG:"eng",ENM:"enm",EPO:"epo",EST:"est",EUS:"eus",FAS:"fas",FIN:"fin",FRA:"fra",FRK:"frk",FRM:"frm",GLE:"gle",GLG:"glg",GRC:"grc",GUJ:"guj",HAT:"hat",HEB:"heb",HIN:"hin",HRV:"hrv",HUN:"hun",IKU:"iku",IND:"ind",ISL:"isl",ITA:"ita",ITA_OLD:"ita_old",JAV:"jav",JPN:"jpn",KAN:"kan",KAT:"kat",KAT_OLD:"kat_old",KAZ:"kaz",KHM:"khm",KIR:"kir",KOR:"kor",KUR:"kur",LAO:"lao",LAT:"lat",LAV:"lav",LIT:"lit",MAL:"mal",MAR:"mar",MKD:"mkd",MLT:"mlt",MSA:"msa",MYA:"mya",NEP:"nep",NLD:"nld",NOR:"nor",ORI:"ori",PAN:"pan",POL:"pol",POR:"por",PUS:"pus",RON:"ron",RUS:"rus",SAN:"san",SIN:"sin",SLK:"slk",SLV:"slv",SPA:"spa",SPA_OLD:"spa_old",SQI:"sqi",SRP:"srp",SRP_LATN:"srp_latn",SWA:"swa",SWE:"swe",SYR:"syr",TAM:"tam",TEL:"tel",TGK:"tgk",TGL:"tgl",THA:"tha",TIR:"tir",TUR:"tur",UIG:"uig",UKR:"ukr",URD:"urd",UZB:"uzb",UZB_CYRL:"uzb_cyrl",VIE:"vie",YID:"yid"}},106:(t,r,e)=>{var n=e(313),o=0;t.exports=function(t){var r=t.id,e=t.action,i=t.payload,a=void 0===i?{}:i,c=r;return void 0===c&&(c=n("Job",o),o+=1),{id:c,action:e,payload:a}}},936:function(t,r,e){function n(t){return n="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},n(t)}var o=this;function i(){"use strict";i=function(){return t};var t={},r=Object.prototype,e=r.hasOwnProperty,o=Object.defineProperty||function(t,r,e){t[r]=e.value},a="function"==typeof Symbol?Symbol:{},c=a.iterator||"@@iterator",u=a.asyncIterator||"@@asyncIterator",f=a.toStringTag||"@@toStringTag";function l(t,r,e){return Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}),t[r]}try{l({},"")}catch(t){l=function(t,r,e){return t[r]=e}}function s(t,r,e,n){var i=r&&r.prototype instanceof y?r:y,a=Object.create(i.prototype),c=new P(n||[]);return o(a,"_invoke",{value:O(t,e,c)}),a}function h(t,r,e){try{return{type:"normal",arg:t.call(r,e)}}catch(t){return{type:"throw",arg:t}}}t.wrap=s;var p={};function y(){}function v(){}function d(){}var g={};l(g,c,(function(){return this}));var m=Object.getPrototypeOf,b=m&&m(m(k([])));b&&b!==r&&e.call(b,c)&&(g=b);var w=d.prototype=y.prototype=Object.create(g);function x(t){["next","throw","return"].forEach((function(r){l(t,r,(function(t){return this._invoke(r,t)}))}))}function L(t,r){function i(o,a,c,u){var f=h(t[o],t,a);if("throw"!==f.type){var l=f.arg,s=l.value;return s&&"object"==n(s)&&e.call(s,"__await")?r.resolve(s.__await).then((function(t){i("next",t,c,u)}),(function(t){i("throw",t,c,u)})):r.resolve(s).then((function(t){l.value=t,c(l)}),(function(t){return i("throw",t,c,u)}))}u(f.arg)}var a;o(this,"_invoke",{value:function(t,e){function n(){return new r((function(r,n){i(t,e,r,n)}))}return a=a?a.then(n,n):n()}})}function O(t,r,e){var n="suspendedStart";return function(o,i){if("executing"===n)throw new Error("Generator is already running");if("completed"===n){if("throw"===o)throw i;return{value:void 0,done:!0}}for(e.method=o,e.arg=i;;){var a=e.delegate;if(a){var c=E(a,e);if(c){if(c===p)continue;return c}}if("next"===e.method)e.sent=e._sent=e.arg;else if("throw"===e.method){if("suspendedStart"===n)throw n="completed",e.arg;e.dispatchException(e.arg)}else"return"===e.method&&e.abrupt("return",e.arg);n="executing";var u=h(t,r,e);if("normal"===u.type){if(n=e.done?"completed":"suspendedYield",u.arg===p)continue;return{value:u.arg,done:e.done}}"throw"===u.type&&(n="completed",e.method="throw",e.arg=u.arg)}}}function E(t,r){var e=r.method,n=t.iterator[e];if(void 0===n)return r.delegate=null,"throw"===e&&t.iterator.return&&(r.method="return",r.arg=void 0,E(t,r),"throw"===r.method)||"return"!==e&&(r.method="throw",r.arg=new TypeError("The iterator does not provide a '"+e+"' method")),p;var o=h(n,t.iterator,r.arg);if("throw"===o.type)return r.method="throw",r.arg=o.arg,r.delegate=null,p;var i=o.arg;return i?i.done?(r[t.resultName]=i.value,r.next=t.nextLoc,"return"!==r.method&&(r.method="next",r.arg=void 0),r.delegate=null,p):i:(r.method="throw",r.arg=new TypeError("iterator result is not an object"),r.delegate=null,p)}function S(t){var r={tryLoc:t[0]};1 in t&&(r.catchLoc=t[1]),2 in t&&(r.finallyLoc=t[2],r.afterLoc=t[3]),this.tryEntries.push(r)}function j(t){var r=t.completion||{};r.type="normal",delete r.arg,t.completion=r}function P(t){this.tryEntries=[{tryLoc:"root"}],t.forEach(S,this),this.reset(!0)}function k(t){if(t){var r=t[c];if(r)return r.call(t);if("function"==typeof t.next)return t;if(!isNaN(t.length)){var n=-1,o=function r(){for(;++n<t.length;)if(e.call(t,n))return r.value=t[n],r.done=!1,r;return r.value=void 0,r.done=!0,r};return o.next=o}}return{next:_}}function _(){return{value:void 0,done:!0}}return v.prototype=d,o(w,"constructor",{value:d,configurable:!0}),o(d,"constructor",{value:v,configurable:!0}),v.displayName=l(d,f,"GeneratorFunction"),t.isGeneratorFunction=function(t){var r="function"==typeof t&&t.constructor;return!!r&&(r===v||"GeneratorFunction"===(r.displayName||r.name))},t.mark=function(t){return Object.setPrototypeOf?Object.setPrototypeOf(t,d):(t.__proto__=d,l(t,f,"GeneratorFunction")),t.prototype=Object.create(w),t},t.awrap=function(t){return{__await:t}},x(L.prototype),l(L.prototype,u,(function(){return this})),t.AsyncIterator=L,t.async=function(r,e,n,o,i){void 0===i&&(i=Promise);var a=new L(s(r,e,n,o),i);return t.isGeneratorFunction(e)?a:a.next().then((function(t){return t.done?t.value:a.next()}))},x(w),l(w,f,"Generator"),l(w,c,(function(){return this})),l(w,"toString",(function(){return"[object Generator]"})),t.keys=function(t){var r=Object(t),e=[];for(var n in r)e.push(n);return e.reverse(),function t(){for(;e.length;){var n=e.pop();if(n in r)return t.value=n,t.done=!1,t}return t.done=!0,t}},t.values=k,P.prototype={constructor:P,reset:function(t){if(this.prev=0,this.next=0,this.sent=this._sent=void 0,this.done=!1,this.delegate=null,this.method="next",this.arg=void 0,this.tryEntries.forEach(j),!t)for(var r in this)"t"===r.charAt(0)&&e.call(this,r)&&!isNaN(+r.slice(1))&&(this[r]=void 0)},stop:function(){this.done=!0;var t=this.tryEntries[0].completion;if("throw"===t.type)throw t.arg;return this.rval},dispatchException:function(t){if(this.done)throw t;var r=this;function n(e,n){return a.type="throw",a.arg=t,r.next=e,n&&(r.method="next",r.arg=void 0),!!n}for(var o=this.tryEntries.length-1;o>=0;--o){var i=this.tryEntries[o],a=i.completion;if("root"===i.tryLoc)return n("end");if(i.tryLoc<=this.prev){var c=e.call(i,"catchLoc"),u=e.call(i,"finallyLoc");if(c&&u){if(this.prev<i.catchLoc)return n(i.catchLoc,!0);if(this.prev<i.finallyLoc)return n(i.finallyLoc)}else if(c){if(this.prev<i.catchLoc)return n(i.catchLoc,!0)}else{if(!u)throw new Error("try statement without catch or finally");if(this.prev<i.finallyLoc)return n(i.finallyLoc)}}}},abrupt:function(t,r){for(var n=this.tryEntries.length-1;n>=0;--n){var o=this.tryEntries[n];if(o.tryLoc<=this.prev&&e.call(o,"finallyLoc")&&this.prev<o.finallyLoc){var i=o;break}}i&&("break"===t||"continue"===t)&&i.tryLoc<=r&&r<=i.finallyLoc&&(i=null);var a=i?i.completion:{};return a.type=t,a.arg=r,i?(this.method="next",this.next=i.finallyLoc,p):this.complete(a)},complete:function(t,r){if("throw"===t.type)throw t.arg;return"break"===t.type||"continue"===t.type?this.next=t.arg:"return"===t.type?(this.rval=this.arg=t.arg,this.method="return",this.next="end"):"normal"===t.type&&r&&(this.next=r),p},finish:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.finallyLoc===t)return this.complete(e.completion,e.afterLoc),j(e),p}},catch:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.tryLoc===t){var n=e.completion;if("throw"===n.type){var o=n.arg;j(e)}return o}}throw new Error("illegal catch attempt")},delegateYield:function(t,r,e){return this.delegate={iterator:k(t),resultName:r,nextLoc:e},"next"===this.method&&(this.arg=void 0),p}},t}function a(t,r){(null==r||r>t.length)&&(r=t.length);for(var e=0,n=new Array(r);e<r;e++)n[e]=t[e];return n}function c(t,r,e,n,o,i,a){try{var c=t[i](a),u=c.value}catch(t){return void e(t)}c.done?r(u):Promise.resolve(u).then(n,o)}function u(t){return function(){var r=this,e=arguments;return new Promise((function(n,o){var i=t.apply(r,e);function a(t){c(i,n,o,a,u,"next",t)}function u(t){c(i,n,o,a,u,"throw",t)}a(void 0)}))}}var f=e(106),l=e(185).log,s=e(313),h=0;t.exports=function(){var t=s("Scheduler",h),r={},e={},n=[];h+=1;var c=function(){return Object.keys(r).length},p=function(){if(0!==n.length)for(var t=Object.keys(r),o=0;o<t.length;o+=1)if(void 0===e[t[o]]){n[0](r[t[o]]);break}},y=function(r,c){return new Promise((function(s,h){var y=f({action:r,payload:c});n.push(function(){var t=u(i().mark((function t(u){return i().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:return n.shift(),e[u.id]=y,t.prev=2,t.t0=s,t.next=6,u[r].apply(o,[].concat(function(t){if(Array.isArray(t))return a(t)}(i=c)||function(t){if("undefined"!=typeof Symbol&&null!=t[Symbol.iterator]||null!=t["@@iterator"])return Array.from(t)}(i)||function(t,r){if(t){if("string"==typeof t)return a(t,r);var e=Object.prototype.toString.call(t).slice(8,-1);return"Object"===e&&t.constructor&&(e=t.constructor.name),"Map"===e||"Set"===e?Array.from(t):"Arguments"===e||/^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(e)?a(t,r):void 0}}(i)||function(){throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.")}(),[y.id]));case 6:t.t1=t.sent,(0,t.t0)(t.t1),t.next=13;break;case 10:t.prev=10,t.t2=t.catch(2),h(t.t2);case 13:return t.prev=13,delete e[u.id],p(),t.finish(13);case 17:case"end":return t.stop()}var i}),t,null,[[2,10,13,17]])})));return function(r){return t.apply(this,arguments)}}()),l("[".concat(t,"]: Add ").concat(y.id," to JobQueue")),l("[".concat(t,"]: JobQueue length=").concat(n.length)),p()}))},v=function(){var r=u(i().mark((function r(e){var n,o,a,u=arguments;return i().wrap((function(r){for(;;)switch(r.prev=r.next){case 0:if(0!==c()){r.next=2;break}throw Error("[".concat(t,"]: You need to have at least one worker before adding jobs"));case 2:for(n=u.length,o=new Array(n>1?n-1:0),a=1;a<n;a++)o[a-1]=u[a];return r.abrupt("return",y(e,o));case 4:case"end":return r.stop()}}),r)})));return function(t){return r.apply(this,arguments)}}(),d=function(){var t=u(i().mark((function t(){return i().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:Object.keys(r).forEach(function(){var t=u(i().mark((function t(e){return i().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:return t.next=2,r[e].terminate();case 2:case"end":return t.stop()}}),t)})));return function(r){return t.apply(this,arguments)}}()),n=[];case 2:case"end":return t.stop()}}),t)})));return function(){return t.apply(this,arguments)}}();return{addWorker:function(e){return r[e.id]=e,l("[".concat(t,"]: Add ").concat(e.id)),l("[".concat(t,"]: Number of workers=").concat(c())),p(),e.id},addJob:v,terminate:d,getQueueLen:function(){return n.length},getNumWorkers:c}}},311:(t,r,e)=>{function n(t){return n="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},n(t)}var o=["logger","errorHandler"];function i(){"use strict";i=function(){return t};var t={},r=Object.prototype,e=r.hasOwnProperty,o=Object.defineProperty||function(t,r,e){t[r]=e.value},a="function"==typeof Symbol?Symbol:{},c=a.iterator||"@@iterator",u=a.asyncIterator||"@@asyncIterator",f=a.toStringTag||"@@toStringTag";function l(t,r,e){return Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}),t[r]}try{l({},"")}catch(t){l=function(t,r,e){return t[r]=e}}function s(t,r,e,n){var i=r&&r.prototype instanceof y?r:y,a=Object.create(i.prototype),c=new P(n||[]);return o(a,"_invoke",{value:O(t,e,c)}),a}function h(t,r,e){try{return{type:"normal",arg:t.call(r,e)}}catch(t){return{type:"throw",arg:t}}}t.wrap=s;var p={};function y(){}function v(){}function d(){}var g={};l(g,c,(function(){return this}));var m=Object.getPrototypeOf,b=m&&m(m(k([])));b&&b!==r&&e.call(b,c)&&(g=b);var w=d.prototype=y.prototype=Object.create(g);function x(t){["next","throw","return"].forEach((function(r){l(t,r,(function(t){return this._invoke(r,t)}))}))}function L(t,r){function i(o,a,c,u){var f=h(t[o],t,a);if("throw"!==f.type){var l=f.arg,s=l.value;return s&&"object"==n(s)&&e.call(s,"__await")?r.resolve(s.__await).then((function(t){i("next",t,c,u)}),(function(t){i("throw",t,c,u)})):r.resolve(s).then((function(t){l.value=t,c(l)}),(function(t){return i("throw",t,c,u)}))}u(f.arg)}var a;o(this,"_invoke",{value:function(t,e){function n(){return new r((function(r,n){i(t,e,r,n)}))}return a=a?a.then(n,n):n()}})}function O(t,r,e){var n="suspendedStart";return function(o,i){if("executing"===n)throw new Error("Generator is already running");if("completed"===n){if("throw"===o)throw i;return{value:void 0,done:!0}}for(e.method=o,e.arg=i;;){var a=e.delegate;if(a){var c=E(a,e);if(c){if(c===p)continue;return c}}if("next"===e.method)e.sent=e._sent=e.arg;else if("throw"===e.method){if("suspendedStart"===n)throw n="completed",e.arg;e.dispatchException(e.arg)}else"return"===e.method&&e.abrupt("return",e.arg);n="executing";var u=h(t,r,e);if("normal"===u.type){if(n=e.done?"completed":"suspendedYield",u.arg===p)continue;return{value:u.arg,done:e.done}}"throw"===u.type&&(n="completed",e.method="throw",e.arg=u.arg)}}}function E(t,r){var e=r.method,n=t.iterator[e];if(void 0===n)return r.delegate=null,"throw"===e&&t.iterator.return&&(r.method="return",r.arg=void 0,E(t,r),"throw"===r.method)||"return"!==e&&(r.method="throw",r.arg=new TypeError("The iterator does not provide a '"+e+"' method")),p;var o=h(n,t.iterator,r.arg);if("throw"===o.type)return r.method="throw",r.arg=o.arg,r.delegate=null,p;var i=o.arg;return i?i.done?(r[t.resultName]=i.value,r.next=t.nextLoc,"return"!==r.method&&(r.method="next",r.arg=void 0),r.delegate=null,p):i:(r.method="throw",r.arg=new TypeError("iterator result is not an object"),r.delegate=null,p)}function S(t){var r={tryLoc:t[0]};1 in t&&(r.catchLoc=t[1]),2 in t&&(r.finallyLoc=t[2],r.afterLoc=t[3]),this.tryEntries.push(r)}function j(t){var r=t.completion||{};r.type="normal",delete r.arg,t.completion=r}function P(t){this.tryEntries=[{tryLoc:"root"}],t.forEach(S,this),this.reset(!0)}function k(t){if(t){var r=t[c];if(r)return r.call(t);if("function"==typeof t.next)return t;if(!isNaN(t.length)){var n=-1,o=function r(){for(;++n<t.length;)if(e.call(t,n))return r.value=t[n],r.done=!1,r;return r.value=void 0,r.done=!0,r};return o.next=o}}return{next:_}}function _(){return{value:void 0,done:!0}}return v.prototype=d,o(w,"constructor",{value:d,configurable:!0}),o(d,"constructor",{value:v,configurable:!0}),v.displayName=l(d,f,"GeneratorFunction"),t.isGeneratorFunction=function(t){var r="function"==typeof t&&t.constructor;return!!r&&(r===v||"GeneratorFunction"===(r.displayName||r.name))},t.mark=function(t){return Object.setPrototypeOf?Object.setPrototypeOf(t,d):(t.__proto__=d,l(t,f,"GeneratorFunction")),t.prototype=Object.create(w),t},t.awrap=function(t){return{__await:t}},x(L.prototype),l(L.prototype,u,(function(){return this})),t.AsyncIterator=L,t.async=function(r,e,n,o,i){void 0===i&&(i=Promise);var a=new L(s(r,e,n,o),i);return t.isGeneratorFunction(e)?a:a.next().then((function(t){return t.done?t.value:a.next()}))},x(w),l(w,f,"Generator"),l(w,c,(function(){return this})),l(w,"toString",(function(){return"[object Generator]"})),t.keys=function(t){var r=Object(t),e=[];for(var n in r)e.push(n);return e.reverse(),function t(){for(;e.length;){var n=e.pop();if(n in r)return t.value=n,t.done=!1,t}return t.done=!0,t}},t.values=k,P.prototype={constructor:P,reset:function(t){if(this.prev=0,this.next=0,this.sent=this._sent=void 0,this.done=!1,this.delegate=null,this.method="next",this.arg=void 0,this.tryEntries.forEach(j),!t)for(var r in this)"t"===r.charAt(0)&&e.call(this,r)&&!isNaN(+r.slice(1))&&(this[r]=void 0)},stop:function(){this.done=!0;var t=this.tryEntries[0].completion;if("throw"===t.type)throw t.arg;return this.rval},dispatchException:function(t){if(this.done)throw t;var r=this;function n(e,n){return a.type="throw",a.arg=t,r.next=e,n&&(r.method="next",r.arg=void 0),!!n}for(var o=this.tryEntries.length-1;o>=0;--o){var i=this.tryEntries[o],a=i.completion;if("root"===i.tryLoc)return n("end");if(i.tryLoc<=this.prev){var c=e.call(i,"catchLoc"),u=e.call(i,"finallyLoc");if(c&&u){if(this.prev<i.catchLoc)return n(i.catchLoc,!0);if(this.prev<i.finallyLoc)return n(i.finallyLoc)}else if(c){if(this.prev<i.catchLoc)return n(i.catchLoc,!0)}else{if(!u)throw new Error("try statement without catch or finally");if(this.prev<i.finallyLoc)return n(i.finallyLoc)}}}},abrupt:function(t,r){for(var n=this.tryEntries.length-1;n>=0;--n){var o=this.tryEntries[n];if(o.tryLoc<=this.prev&&e.call(o,"finallyLoc")&&this.prev<o.finallyLoc){var i=o;break}}i&&("break"===t||"continue"===t)&&i.tryLoc<=r&&r<=i.finallyLoc&&(i=null);var a=i?i.completion:{};return a.type=t,a.arg=r,i?(this.method="next",this.next=i.finallyLoc,p):this.complete(a)},complete:function(t,r){if("throw"===t.type)throw t.arg;return"break"===t.type||"continue"===t.type?this.next=t.arg:"return"===t.type?(this.rval=this.arg=t.arg,this.method="return",this.next="end"):"normal"===t.type&&r&&(this.next=r),p},finish:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.finallyLoc===t)return this.complete(e.completion,e.afterLoc),j(e),p}},catch:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.tryLoc===t){var n=e.completion;if("throw"===n.type){var o=n.arg;j(e)}return o}}throw new Error("illegal catch attempt")},delegateYield:function(t,r,e){return this.delegate={iterator:k(t),resultName:r,nextLoc:e},"next"===this.method&&(this.arg=void 0),p}},t}function a(t,r){(null==r||r>t.length)&&(r=t.length);for(var e=0,n=new Array(r);e<r;e++)n[e]=t[e];return n}function c(t,r){var e=Object.keys(t);if(Object.getOwnPropertySymbols){var n=Object.getOwnPropertySymbols(t);r&&(n=n.filter((function(r){return Object.getOwnPropertyDescriptor(t,r).enumerable}))),e.push.apply(e,n)}return e}function u(t){for(var r=1;r<arguments.length;r++){var e=null!=arguments[r]?arguments[r]:{};r%2?c(Object(e),!0).forEach((function(r){f(t,r,e[r])})):Object.getOwnPropertyDescriptors?Object.defineProperties(t,Object.getOwnPropertyDescriptors(e)):c(Object(e)).forEach((function(r){Object.defineProperty(t,r,Object.getOwnPropertyDescriptor(e,r))}))}return t}function f(t,r,e){return(r=function(t){var r=function(t,r){if("object"!==n(t)||null===t)return t;var e=t[Symbol.toPrimitive];if(void 0!==e){var o=e.call(t,"string");if("object"!==n(o))return o;throw new TypeError("@@toPrimitive must return a primitive value.")}return String(t)}(t);return"symbol"===n(r)?r:String(r)}(r))in t?Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}):t[r]=e,t}function l(t,r){if(null==t)return{};var e,n,o=function(t,r){if(null==t)return{};var e,n,o={},i=Object.keys(t);for(n=0;n<i.length;n++)e=i[n],r.indexOf(e)>=0||(o[e]=t[e]);return o}(t,r);if(Object.getOwnPropertySymbols){var i=Object.getOwnPropertySymbols(t);for(n=0;n<i.length;n++)e=i[n],r.indexOf(e)>=0||Object.prototype.propertyIsEnumerable.call(t,e)&&(o[e]=t[e])}return o}function s(t,r,e,n,o,i,a){try{var c=t[i](a),u=c.value}catch(t){return void e(t)}c.done?r(u):Promise.resolve(u).then(n,o)}function h(t){return function(){var r=this,e=arguments;return new Promise((function(n,o){var i=t.apply(r,e);function a(t){s(i,n,o,a,c,"next",t)}function c(t){s(i,n,o,a,c,"throw",t)}a(void 0)}))}}var p=e(187),y=e(549),v=e(106),d=e(185).log,g=e(313),m=e(847),b=e(581),w=b.defaultOptions,x=b.spawnWorker,L=b.terminateWorker,O=b.onMessage,E=b.loadImage,S=b.send,j=0;t.exports=h(i().mark((function t(){var r,e,n,c,f,s,b,P,k,_,T,N,A,G,I,F,R,D,M,C,U,Y,B,z,H,K,W,J,V,Z,Q,q,X,$,tt,rt,et,nt,ot,it,at=arguments;return i().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:return r=at.length>0&&void 0!==at[0]?at[0]:"eng",e=at.length>1&&void 0!==at[1]?at[1]:m.LSTM_ONLY,n=at.length>2&&void 0!==at[2]?at[2]:{},c=at.length>3&&void 0!==at[3]?at[3]:{},f=g("Worker",j),s=p(u(u({},w),n)),b=s.logger,P=s.errorHandler,k=l(s,o),_={},T={},N="string"==typeof r?r.split("+"):r,A=e,G=c,I=[m.DEFAULT,m.LSTM_ONLY].includes(e)&&!k.legacyCore,D=new Promise((function(t,r){R=t,F=r})),M=function(t){F(t.message)},(C=x(k)).onerror=M,j+=1,U=function(t,r){_[t]=r},Y=function(t,r){T[t]=r},B=function(t){var r=t.id,e=t.action,n=t.payload;return new Promise((function(t,o){d("[".concat(f,"]: Start ").concat(r,", action=").concat(e));var i="".concat(e,"-").concat(r);U(i,t),Y(i,o),S(C,{workerId:f,jobId:r,action:e,payload:n})}))},z=function(){return console.warn("`load` is depreciated and should be removed from code (workers now come pre-loaded)")},H=function(t){return B(v({id:t,action:"load",payload:{options:{lstmOnly:I,corePath:k.corePath,logging:k.logging}}}))},K=function(t,r,e){return B(v({id:e,action:"FS",payload:{method:"writeFile",args:[t,r]}}))},W=function(t,r){return B(v({id:r,action:"FS",payload:{method:"readFile",args:[t,{encoding:"utf8"}]}}))},J=function(t,r){return B(v({id:r,action:"FS",payload:{method:"unlink",args:[t]}}))},V=function(t,r,e){return B(v({id:e,action:"FS",payload:{method:t,args:r}}))},Z=function(){return console.warn("`loadLanguage` is depreciated and should be removed from code (workers now come with language pre-loaded)")},Q=function(t,r){return B(v({id:r,action:"loadLanguage",payload:{langs:t,options:{langPath:k.langPath,dataPath:k.dataPath,cachePath:k.cachePath,cacheMethod:k.cacheMethod,gzip:k.gzip,lstmOnly:[m.DEFAULT,m.LSTM_ONLY].includes(A)&&!k.legacyLang}}}))},q=function(){return console.warn("`initialize` is depreciated and should be removed from code (workers now come pre-initialized)")},X=function(t,r,e,n){return B(v({id:n,action:"initialize",payload:{langs:t,oem:r,config:e}}))},$=function(){var t=arguments.length>0&&void 0!==arguments[0]?arguments[0]:"eng",r=arguments.length>1?arguments[1]:void 0,e=arguments.length>2?arguments[2]:void 0,n=arguments.length>3?arguments[3]:void 0;if(I&&[m.TESSERACT_ONLY,m.TESSERACT_LSTM_COMBINED].includes(r))throw Error("Legacy model requested but code missing.");var o=r||A;A=o;var i=e||G;G=i;var c,u=("string"==typeof t?t.split("+"):t).filter((function(t){return!N.includes(t)}));return N.push.apply(N,function(t){if(Array.isArray(t))return a(t)}(c=u)||function(t){if("undefined"!=typeof Symbol&&null!=t[Symbol.iterator]||null!=t["@@iterator"])return Array.from(t)}(c)||function(t,r){if(t){if("string"==typeof t)return a(t,r);var e=Object.prototype.toString.call(t).slice(8,-1);return"Object"===e&&t.constructor&&(e=t.constructor.name),"Map"===e||"Set"===e?Array.from(t):"Arguments"===e||/^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(e)?a(t,r):void 0}}(c)||function(){throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.")}()),u.length>0?Q(u,n).then((function(){return X(t,o,i,n)})):X(t,o,i,n)},tt=function(){return B(v({id:arguments.length>1?arguments[1]:void 0,action:"setParameters",payload:{params:arguments.length>0&&void 0!==arguments[0]?arguments[0]:{}}}))},rt=function(){var t=h(i().mark((function t(r){var e,n,o,a=arguments;return i().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:return e=a.length>1&&void 0!==a[1]?a[1]:{},n=a.length>2&&void 0!==a[2]?a[2]:{blocks:!0,text:!0,hocr:!0,tsv:!0},o=a.length>3?a[3]:void 0,t.t0=B,t.t1=v,t.t2=o,t.next=8,E(r);case 8:return t.t3=t.sent,t.t4=e,t.t5=n,t.t6={image:t.t3,options:t.t4,output:t.t5},t.t7={id:t.t2,action:"recognize",payload:t.t6},t.t8=(0,t.t1)(t.t7),t.abrupt("return",(0,t.t0)(t.t8));case 15:case"end":return t.stop()}}),t)})));return function(r){return t.apply(this,arguments)}}(),et=function(){var t=arguments.length>0&&void 0!==arguments[0]?arguments[0]:"Tesseract OCR Result",r=arguments.length>1&&void 0!==arguments[1]&&arguments[1],e=arguments.length>2?arguments[2]:void 0;return console.log("`getPDF` function is depreciated. `recognize` option `savePDF` should be used instead."),B(v({id:e,action:"getPDF",payload:{title:t,textonly:r}}))},nt=function(){var t=h(i().mark((function t(r,e){return i().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:if(!I){t.next=2;break}throw Error("`worker.detect` requires Legacy model, which was not loaded.");case 2:return t.t0=B,t.t1=v,t.t2=e,t.next=7,E(r);case 7:return t.t3=t.sent,t.t4={image:t.t3},t.t5={id:t.t2,action:"detect",payload:t.t4},t.t6=(0,t.t1)(t.t5),t.abrupt("return",(0,t.t0)(t.t6));case 12:case"end":return t.stop()}}),t)})));return function(r,e){return t.apply(this,arguments)}}(),ot=function(){var t=h(i().mark((function t(){return i().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:return null!==C&&(L(C),C=null),t.abrupt("return",Promise.resolve());case 2:case"end":return t.stop()}}),t)})));return function(){return t.apply(this,arguments)}}(),O(C,(function(t){var r=t.workerId,e=t.jobId,n=t.status,o=t.action,i=t.data,a="".concat(o,"-").concat(e);if("resolve"===n){d("[".concat(r,"]: Complete ").concat(e));var c=i;"recognize"===o?c=y(i):"getPDF"===o&&(c=Array.from(u(u({},i),{},{length:Object.keys(i).length}))),_[a]({jobId:e,data:c})}else if("reject"===n){if(T[a](i),"load"===o&&F(i),!P)throw Error(i);P(i)}else"progress"===n&&b(u(u({},i),{},{userJobId:e}))})),it={id:f,worker:C,setResolve:U,setReject:Y,load:z,writeText:K,readText:W,removeFile:J,FS:V,loadLanguage:Z,initialize:q,reinitialize:$,setParameters:tt,recognize:rt,getPDF:et,detect:nt,terminate:ot},H().then((function(){return Q(r)})).then((function(){return X(r,e,c)})).then((function(){return R(it)})).catch((function(){})),t.abrupt("return",D);case 40:case"end":return t.stop()}}),t)})))},352:(t,r,e)=>{function n(t){return n="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},n(t)}function o(t,r){var e=Object.keys(t);if(Object.getOwnPropertySymbols){var n=Object.getOwnPropertySymbols(t);r&&(n=n.filter((function(r){return Object.getOwnPropertyDescriptor(t,r).enumerable}))),e.push.apply(e,n)}return e}function i(t,r,e){return(r=function(t){var r=function(t,r){if("object"!==n(t)||null===t)return t;var e=t[Symbol.toPrimitive];if(void 0!==e){var o=e.call(t,"string");if("object"!==n(o))return o;throw new TypeError("@@toPrimitive must return a primitive value.")}return String(t)}(t);return"symbol"===n(r)?r:String(r)}(r))in t?Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}):t[r]=e,t}e(760);var a=e(936),c=e(311),u=e(793),f=e(5),l=e(847),s=e(711),h=e(185).setLogging;t.exports=function(t){for(var r=1;r<arguments.length;r++){var e=null!=arguments[r]?arguments[r]:{};r%2?o(Object(e),!0).forEach((function(r){i(t,r,e[r])})):Object.getOwnPropertyDescriptors?Object.defineProperties(t,Object.getOwnPropertyDescriptors(e)):o(Object(e)).forEach((function(r){Object.defineProperty(t,r,Object.getOwnPropertyDescriptor(e,r))}))}return t}({languages:f,OEM:l,PSM:s,createScheduler:a,createWorker:c,setLogging:h},u)},549:t=>{function r(t){return r="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},r(t)}function e(t,r){var e=Object.keys(t);if(Object.getOwnPropertySymbols){var n=Object.getOwnPropertySymbols(t);r&&(n=n.filter((function(r){return Object.getOwnPropertyDescriptor(t,r).enumerable}))),e.push.apply(e,n)}return e}function n(t){for(var r=1;r<arguments.length;r++){var n=null!=arguments[r]?arguments[r]:{};r%2?e(Object(n),!0).forEach((function(r){o(t,r,n[r])})):Object.getOwnPropertyDescriptors?Object.defineProperties(t,Object.getOwnPropertyDescriptors(n)):e(Object(n)).forEach((function(r){Object.defineProperty(t,r,Object.getOwnPropertyDescriptor(n,r))}))}return t}function o(t,e,n){return(e=function(t){var e=function(t,e){if("object"!==r(t)||null===t)return t;var n=t[Symbol.toPrimitive];if(void 0!==n){var o=n.call(t,"string");if("object"!==r(o))return o;throw new TypeError("@@toPrimitive must return a primitive value.")}return String(t)}(t);return"symbol"===r(e)?e:String(e)}(e))in t?Object.defineProperty(t,e,{value:n,enumerable:!0,configurable:!0,writable:!0}):t[e]=n,t}t.exports=function(t){var r=[],e=[],o=[],i=[],a=[];return t.blocks&&t.blocks.forEach((function(c){c.paragraphs.forEach((function(r){r.lines.forEach((function(e){e.words.forEach((function(o){o.symbols.forEach((function(i){a.push(n(n({},i),{},{page:t,block:c,paragraph:r,line:e,word:o}))})),i.push(n(n({},o),{},{page:t,block:c,paragraph:r,line:e}))})),o.push(n(n({},e),{},{page:t,block:c,paragraph:r}))})),e.push(n(n({},r),{},{page:t,block:c}))})),r.push(n(n({},c),{},{page:t}))})),n(n({},t),{},{blocks:r,paragraphs:e,lines:o,words:i,symbols:a})}},129:(t,r,e)=>{function n(t){return n="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},n(t)}var o=e(670);t.exports=function(t){var r={};return"undefined"!=typeof WorkerGlobalScope?r.type="webworker":o()?r.type="electron":"object"===("undefined"==typeof document?"undefined":n(document))?r.type="browser":"object"===("undefined"==typeof process?"undefined":n(process))&&(r.type="node"),void 0===t?r:r[t]}},313:t=>{t.exports=function(t,r){return"".concat(t,"-").concat(r,"-").concat(Math.random().toString(16).slice(3,8))}},185:function(t,r){var e=this,n=!1;r.logging=n,r.setLogging=function(t){n=t},r.log=function(){for(var t=arguments.length,r=new Array(t),o=0;o<t;o++)r[o]=arguments[o];return n?console.log.apply(e,r):null}},187:(t,r,e)=>{function n(t){return n="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},n(t)}function o(t,r){var e=Object.keys(t);if(Object.getOwnPropertySymbols){var n=Object.getOwnPropertySymbols(t);r&&(n=n.filter((function(r){return Object.getOwnPropertyDescriptor(t,r).enumerable}))),e.push.apply(e,n)}return e}function i(t,r,e){return(r=function(t){var r=function(t,r){if("object"!==n(t)||null===t)return t;var e=t[Symbol.toPrimitive];if(void 0!==e){var o=e.call(t,"string");if("object"!==n(o))return o;throw new TypeError("@@toPrimitive must return a primitive value.")}return String(t)}(t);return"symbol"===n(r)?r:String(r)}(r))in t?Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}):t[r]=e,t}var a="browser"===e(129)("type")?function(t){return new URL(t,window.location.href).href}:function(t){return t};t.exports=function(t){var r=function(t){for(var r=1;r<arguments.length;r++){var e=null!=arguments[r]?arguments[r]:{};r%2?o(Object(e),!0).forEach((function(r){i(t,r,e[r])})):Object.getOwnPropertyDescriptors?Object.defineProperties(t,Object.getOwnPropertyDescriptors(e)):o(Object(e)).forEach((function(r){Object.defineProperty(t,r,Object.getOwnPropertyDescriptor(e,r))}))}return t}({},t);return["corePath","workerPath","langPath"].forEach((function(e){t[e]&&(r[e]=a(r[e]))})),r}},854:(t,r,e)=>{function n(t){return n="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},n(t)}function o(t,r){var e=Object.keys(t);if(Object.getOwnPropertySymbols){var n=Object.getOwnPropertySymbols(t);r&&(n=n.filter((function(r){return Object.getOwnPropertyDescriptor(t,r).enumerable}))),e.push.apply(e,n)}return e}function i(t){for(var r=1;r<arguments.length;r++){var e=null!=arguments[r]?arguments[r]:{};r%2?o(Object(e),!0).forEach((function(r){a(t,r,e[r])})):Object.getOwnPropertyDescriptors?Object.defineProperties(t,Object.getOwnPropertyDescriptors(e)):o(Object(e)).forEach((function(r){Object.defineProperty(t,r,Object.getOwnPropertyDescriptor(e,r))}))}return t}function a(t,r,e){return(r=function(t){var r=function(t,r){if("object"!==n(t)||null===t)return t;var e=t[Symbol.toPrimitive];if(void 0!==e){var o=e.call(t,"string");if("object"!==n(o))return o;throw new TypeError("@@toPrimitive must return a primitive value.")}return String(t)}(t);return"symbol"===n(r)?r:String(r)}(r))in t?Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}):t[r]=e,t}var c=e(147).i8,u=e(341);t.exports=i(i({},u),{},{workerPath:"https://cdn.jsdelivr.net/npm/tesseract.js@v".concat(c,"/dist/worker.min.js")})},581:(t,r,e)=>{var n=e(854),o=e(676),i=e(100),a=e(202),c=e(772),u=e(931);t.exports={defaultOptions:n,spawnWorker:o,terminateWorker:i,onMessage:a,send:c,loadImage:u}},931:t=>{function r(t){return r="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},r(t)}function e(){"use strict";e=function(){return t};var t={},n=Object.prototype,o=n.hasOwnProperty,i=Object.defineProperty||function(t,r,e){t[r]=e.value},a="function"==typeof Symbol?Symbol:{},c=a.iterator||"@@iterator",u=a.asyncIterator||"@@asyncIterator",f=a.toStringTag||"@@toStringTag";function l(t,r,e){return Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}),t[r]}try{l({},"")}catch(t){l=function(t,r,e){return t[r]=e}}function s(t,r,e,n){var o=r&&r.prototype instanceof y?r:y,a=Object.create(o.prototype),c=new P(n||[]);return i(a,"_invoke",{value:O(t,e,c)}),a}function h(t,r,e){try{return{type:"normal",arg:t.call(r,e)}}catch(t){return{type:"throw",arg:t}}}t.wrap=s;var p={};function y(){}function v(){}function d(){}var g={};l(g,c,(function(){return this}));var m=Object.getPrototypeOf,b=m&&m(m(k([])));b&&b!==n&&o.call(b,c)&&(g=b);var w=d.prototype=y.prototype=Object.create(g);function x(t){["next","throw","return"].forEach((function(r){l(t,r,(function(t){return this._invoke(r,t)}))}))}function L(t,e){function n(i,a,c,u){var f=h(t[i],t,a);if("throw"!==f.type){var l=f.arg,s=l.value;return s&&"object"==r(s)&&o.call(s,"__await")?e.resolve(s.__await).then((function(t){n("next",t,c,u)}),(function(t){n("throw",t,c,u)})):e.resolve(s).then((function(t){l.value=t,c(l)}),(function(t){return n("throw",t,c,u)}))}u(f.arg)}var a;i(this,"_invoke",{value:function(t,r){function o(){return new e((function(e,o){n(t,r,e,o)}))}return a=a?a.then(o,o):o()}})}function O(t,r,e){var n="suspendedStart";return function(o,i){if("executing"===n)throw new Error("Generator is already running");if("completed"===n){if("throw"===o)throw i;return{value:void 0,done:!0}}for(e.method=o,e.arg=i;;){var a=e.delegate;if(a){var c=E(a,e);if(c){if(c===p)continue;return c}}if("next"===e.method)e.sent=e._sent=e.arg;else if("throw"===e.method){if("suspendedStart"===n)throw n="completed",e.arg;e.dispatchException(e.arg)}else"return"===e.method&&e.abrupt("return",e.arg);n="executing";var u=h(t,r,e);if("normal"===u.type){if(n=e.done?"completed":"suspendedYield",u.arg===p)continue;return{value:u.arg,done:e.done}}"throw"===u.type&&(n="completed",e.method="throw",e.arg=u.arg)}}}function E(t,r){var e=r.method,n=t.iterator[e];if(void 0===n)return r.delegate=null,"throw"===e&&t.iterator.return&&(r.method="return",r.arg=void 0,E(t,r),"throw"===r.method)||"return"!==e&&(r.method="throw",r.arg=new TypeError("The iterator does not provide a '"+e+"' method")),p;var o=h(n,t.iterator,r.arg);if("throw"===o.type)return r.method="throw",r.arg=o.arg,r.delegate=null,p;var i=o.arg;return i?i.done?(r[t.resultName]=i.value,r.next=t.nextLoc,"return"!==r.method&&(r.method="next",r.arg=void 0),r.delegate=null,p):i:(r.method="throw",r.arg=new TypeError("iterator result is not an object"),r.delegate=null,p)}function S(t){var r={tryLoc:t[0]};1 in t&&(r.catchLoc=t[1]),2 in t&&(r.finallyLoc=t[2],r.afterLoc=t[3]),this.tryEntries.push(r)}function j(t){var r=t.completion||{};r.type="normal",delete r.arg,t.completion=r}function P(t){this.tryEntries=[{tryLoc:"root"}],t.forEach(S,this),this.reset(!0)}function k(t){if(t){var r=t[c];if(r)return r.call(t);if("function"==typeof t.next)return t;if(!isNaN(t.length)){var e=-1,n=function r(){for(;++e<t.length;)if(o.call(t,e))return r.value=t[e],r.done=!1,r;return r.value=void 0,r.done=!0,r};return n.next=n}}return{next:_}}function _(){return{value:void 0,done:!0}}return v.prototype=d,i(w,"constructor",{value:d,configurable:!0}),i(d,"constructor",{value:v,configurable:!0}),v.displayName=l(d,f,"GeneratorFunction"),t.isGeneratorFunction=function(t){var r="function"==typeof t&&t.constructor;return!!r&&(r===v||"GeneratorFunction"===(r.displayName||r.name))},t.mark=function(t){return Object.setPrototypeOf?Object.setPrototypeOf(t,d):(t.__proto__=d,l(t,f,"GeneratorFunction")),t.prototype=Object.create(w),t},t.awrap=function(t){return{__await:t}},x(L.prototype),l(L.prototype,u,(function(){return this})),t.AsyncIterator=L,t.async=function(r,e,n,o,i){void 0===i&&(i=Promise);var a=new L(s(r,e,n,o),i);return t.isGeneratorFunction(e)?a:a.next().then((function(t){return t.done?t.value:a.next()}))},x(w),l(w,f,"Generator"),l(w,c,(function(){return this})),l(w,"toString",(function(){return"[object Generator]"})),t.keys=function(t){var r=Object(t),e=[];for(var n in r)e.push(n);return e.reverse(),function t(){for(;e.length;){var n=e.pop();if(n in r)return t.value=n,t.done=!1,t}return t.done=!0,t}},t.values=k,P.prototype={constructor:P,reset:function(t){if(this.prev=0,this.next=0,this.sent=this._sent=void 0,this.done=!1,this.delegate=null,this.method="next",this.arg=void 0,this.tryEntries.forEach(j),!t)for(var r in this)"t"===r.charAt(0)&&o.call(this,r)&&!isNaN(+r.slice(1))&&(this[r]=void 0)},stop:function(){this.done=!0;var t=this.tryEntries[0].completion;if("throw"===t.type)throw t.arg;return this.rval},dispatchException:function(t){if(this.done)throw t;var r=this;function e(e,n){return a.type="throw",a.arg=t,r.next=e,n&&(r.method="next",r.arg=void 0),!!n}for(var n=this.tryEntries.length-1;n>=0;--n){var i=this.tryEntries[n],a=i.completion;if("root"===i.tryLoc)return e("end");if(i.tryLoc<=this.prev){var c=o.call(i,"catchLoc"),u=o.call(i,"finallyLoc");if(c&&u){if(this.prev<i.catchLoc)return e(i.catchLoc,!0);if(this.prev<i.finallyLoc)return e(i.finallyLoc)}else if(c){if(this.prev<i.catchLoc)return e(i.catchLoc,!0)}else{if(!u)throw new Error("try statement without catch or finally");if(this.prev<i.finallyLoc)return e(i.finallyLoc)}}}},abrupt:function(t,r){for(var e=this.tryEntries.length-1;e>=0;--e){var n=this.tryEntries[e];if(n.tryLoc<=this.prev&&o.call(n,"finallyLoc")&&this.prev<n.finallyLoc){var i=n;break}}i&&("break"===t||"continue"===t)&&i.tryLoc<=r&&r<=i.finallyLoc&&(i=null);var a=i?i.completion:{};return a.type=t,a.arg=r,i?(this.method="next",this.next=i.finallyLoc,p):this.complete(a)},complete:function(t,r){if("throw"===t.type)throw t.arg;return"break"===t.type||"continue"===t.type?this.next=t.arg:"return"===t.type?(this.rval=this.arg=t.arg,this.method="return",this.next="end"):"normal"===t.type&&r&&(this.next=r),p},finish:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.finallyLoc===t)return this.complete(e.completion,e.afterLoc),j(e),p}},catch:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.tryLoc===t){var n=e.completion;if("throw"===n.type){var o=n.arg;j(e)}return o}}throw new Error("illegal catch attempt")},delegateYield:function(t,r,e){return this.delegate={iterator:k(t),resultName:r,nextLoc:e},"next"===this.method&&(this.arg=void 0),p}},t}function n(t,r,e,n,o,i,a){try{var c=t[i](a),u=c.value}catch(t){return void e(t)}c.done?r(u):Promise.resolve(u).then(n,o)}function o(t){return function(){var r=this,e=arguments;return new Promise((function(o,i){var a=t.apply(r,e);function c(t){n(a,o,i,c,u,"next",t)}function u(t){n(a,o,i,c,u,"throw",t)}c(void 0)}))}}var i=function(t){return new Promise((function(r,e){var n=new FileReader;n.onload=function(){r(n.result)},n.onerror=function(t){var r=t.target.error.code;e(Error("File could not be read! Code=".concat(r)))},n.readAsArrayBuffer(t)}))},a=function(){var t=o(e().mark((function t(r){var n,c,u;return e().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:if(n=r,void 0!==r){t.next=3;break}return t.abrupt("return","undefined");case 3:if("string"!=typeof r){t.next=16;break}if(!/data:image\/([a-zA-Z]*);base64,([^"]*)/.test(r)){t.next=8;break}n=atob(r.split(",")[1]).split("").map((function(t){return t.charCodeAt(0)})),t.next=14;break;case 8:return t.next=10,fetch(r);case 10:return c=t.sent,t.next=13,c.arrayBuffer();case 13:n=t.sent;case 14:t.next=43;break;case 16:if(!("undefined"!=typeof HTMLElement&&r instanceof HTMLElement)){t.next=30;break}if("IMG"!==r.tagName){t.next=21;break}return t.next=20,a(r.src);case 20:n=t.sent;case 21:if("VIDEO"!==r.tagName){t.next=25;break}return t.next=24,a(r.poster);case 24:n=t.sent;case 25:if("CANVAS"!==r.tagName){t.next=28;break}return t.next=28,new Promise((function(t){r.toBlob(function(){var r=o(e().mark((function r(o){return e().wrap((function(r){for(;;)switch(r.prev=r.next){case 0:return r.next=2,i(o);case 2:n=r.sent,t();case 4:case"end":return r.stop()}}),r)})));return function(t){return r.apply(this,arguments)}}())}));case 28:t.next=43;break;case 30:if(!("undefined"!=typeof OffscreenCanvas&&r instanceof OffscreenCanvas)){t.next=39;break}return t.next=33,r.convertToBlob();case 33:return u=t.sent,t.next=36,i(u);case 36:n=t.sent,t.next=43;break;case 39:if(!(r instanceof File||r instanceof Blob)){t.next=43;break}return t.next=42,i(r);case 42:n=t.sent;case 43:return t.abrupt("return",new Uint8Array(n));case 44:case"end":return t.stop()}}),t)})));return function(r){return t.apply(this,arguments)}}();t.exports=a},202:t=>{t.exports=function(t,r){t.onmessage=function(t){var e=t.data;r(e)}}},772:t=>{function r(t){return r="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},r(t)}function e(){"use strict";e=function(){return t};var t={},n=Object.prototype,o=n.hasOwnProperty,i=Object.defineProperty||function(t,r,e){t[r]=e.value},a="function"==typeof Symbol?Symbol:{},c=a.iterator||"@@iterator",u=a.asyncIterator||"@@asyncIterator",f=a.toStringTag||"@@toStringTag";function l(t,r,e){return Object.defineProperty(t,r,{value:e,enumerable:!0,configurable:!0,writable:!0}),t[r]}try{l({},"")}catch(t){l=function(t,r,e){return t[r]=e}}function s(t,r,e,n){var o=r&&r.prototype instanceof y?r:y,a=Object.create(o.prototype),c=new P(n||[]);return i(a,"_invoke",{value:O(t,e,c)}),a}function h(t,r,e){try{return{type:"normal",arg:t.call(r,e)}}catch(t){return{type:"throw",arg:t}}}t.wrap=s;var p={};function y(){}function v(){}function d(){}var g={};l(g,c,(function(){return this}));var m=Object.getPrototypeOf,b=m&&m(m(k([])));b&&b!==n&&o.call(b,c)&&(g=b);var w=d.prototype=y.prototype=Object.create(g);function x(t){["next","throw","return"].forEach((function(r){l(t,r,(function(t){return this._invoke(r,t)}))}))}function L(t,e){function n(i,a,c,u){var f=h(t[i],t,a);if("throw"!==f.type){var l=f.arg,s=l.value;return s&&"object"==r(s)&&o.call(s,"__await")?e.resolve(s.__await).then((function(t){n("next",t,c,u)}),(function(t){n("throw",t,c,u)})):e.resolve(s).then((function(t){l.value=t,c(l)}),(function(t){return n("throw",t,c,u)}))}u(f.arg)}var a;i(this,"_invoke",{value:function(t,r){function o(){return new e((function(e,o){n(t,r,e,o)}))}return a=a?a.then(o,o):o()}})}function O(t,r,e){var n="suspendedStart";return function(o,i){if("executing"===n)throw new Error("Generator is already running");if("completed"===n){if("throw"===o)throw i;return{value:void 0,done:!0}}for(e.method=o,e.arg=i;;){var a=e.delegate;if(a){var c=E(a,e);if(c){if(c===p)continue;return c}}if("next"===e.method)e.sent=e._sent=e.arg;else if("throw"===e.method){if("suspendedStart"===n)throw n="completed",e.arg;e.dispatchException(e.arg)}else"return"===e.method&&e.abrupt("return",e.arg);n="executing";var u=h(t,r,e);if("normal"===u.type){if(n=e.done?"completed":"suspendedYield",u.arg===p)continue;return{value:u.arg,done:e.done}}"throw"===u.type&&(n="completed",e.method="throw",e.arg=u.arg)}}}function E(t,r){var e=r.method,n=t.iterator[e];if(void 0===n)return r.delegate=null,"throw"===e&&t.iterator.return&&(r.method="return",r.arg=void 0,E(t,r),"throw"===r.method)||"return"!==e&&(r.method="throw",r.arg=new TypeError("The iterator does not provide a '"+e+"' method")),p;var o=h(n,t.iterator,r.arg);if("throw"===o.type)return r.method="throw",r.arg=o.arg,r.delegate=null,p;var i=o.arg;return i?i.done?(r[t.resultName]=i.value,r.next=t.nextLoc,"return"!==r.method&&(r.method="next",r.arg=void 0),r.delegate=null,p):i:(r.method="throw",r.arg=new TypeError("iterator result is not an object"),r.delegate=null,p)}function S(t){var r={tryLoc:t[0]};1 in t&&(r.catchLoc=t[1]),2 in t&&(r.finallyLoc=t[2],r.afterLoc=t[3]),this.tryEntries.push(r)}function j(t){var r=t.completion||{};r.type="normal",delete r.arg,t.completion=r}function P(t){this.tryEntries=[{tryLoc:"root"}],t.forEach(S,this),this.reset(!0)}function k(t){if(t){var r=t[c];if(r)return r.call(t);if("function"==typeof t.next)return t;if(!isNaN(t.length)){var e=-1,n=function r(){for(;++e<t.length;)if(o.call(t,e))return r.value=t[e],r.done=!1,r;return r.value=void 0,r.done=!0,r};return n.next=n}}return{next:_}}function _(){return{value:void 0,done:!0}}return v.prototype=d,i(w,"constructor",{value:d,configurable:!0}),i(d,"constructor",{value:v,configurable:!0}),v.displayName=l(d,f,"GeneratorFunction"),t.isGeneratorFunction=function(t){var r="function"==typeof t&&t.constructor;return!!r&&(r===v||"GeneratorFunction"===(r.displayName||r.name))},t.mark=function(t){return Object.setPrototypeOf?Object.setPrototypeOf(t,d):(t.__proto__=d,l(t,f,"GeneratorFunction")),t.prototype=Object.create(w),t},t.awrap=function(t){return{__await:t}},x(L.prototype),l(L.prototype,u,(function(){return this})),t.AsyncIterator=L,t.async=function(r,e,n,o,i){void 0===i&&(i=Promise);var a=new L(s(r,e,n,o),i);return t.isGeneratorFunction(e)?a:a.next().then((function(t){return t.done?t.value:a.next()}))},x(w),l(w,f,"Generator"),l(w,c,(function(){return this})),l(w,"toString",(function(){return"[object Generator]"})),t.keys=function(t){var r=Object(t),e=[];for(var n in r)e.push(n);return e.reverse(),function t(){for(;e.length;){var n=e.pop();if(n in r)return t.value=n,t.done=!1,t}return t.done=!0,t}},t.values=k,P.prototype={constructor:P,reset:function(t){if(this.prev=0,this.next=0,this.sent=this._sent=void 0,this.done=!1,this.delegate=null,this.method="next",this.arg=void 0,this.tryEntries.forEach(j),!t)for(var r in this)"t"===r.charAt(0)&&o.call(this,r)&&!isNaN(+r.slice(1))&&(this[r]=void 0)},stop:function(){this.done=!0;var t=this.tryEntries[0].completion;if("throw"===t.type)throw t.arg;return this.rval},dispatchException:function(t){if(this.done)throw t;var r=this;function e(e,n){return a.type="throw",a.arg=t,r.next=e,n&&(r.method="next",r.arg=void 0),!!n}for(var n=this.tryEntries.length-1;n>=0;--n){var i=this.tryEntries[n],a=i.completion;if("root"===i.tryLoc)return e("end");if(i.tryLoc<=this.prev){var c=o.call(i,"catchLoc"),u=o.call(i,"finallyLoc");if(c&&u){if(this.prev<i.catchLoc)return e(i.catchLoc,!0);if(this.prev<i.finallyLoc)return e(i.finallyLoc)}else if(c){if(this.prev<i.catchLoc)return e(i.catchLoc,!0)}else{if(!u)throw new Error("try statement without catch or finally");if(this.prev<i.finallyLoc)return e(i.finallyLoc)}}}},abrupt:function(t,r){for(var e=this.tryEntries.length-1;e>=0;--e){var n=this.tryEntries[e];if(n.tryLoc<=this.prev&&o.call(n,"finallyLoc")&&this.prev<n.finallyLoc){var i=n;break}}i&&("break"===t||"continue"===t)&&i.tryLoc<=r&&r<=i.finallyLoc&&(i=null);var a=i?i.completion:{};return a.type=t,a.arg=r,i?(this.method="next",this.next=i.finallyLoc,p):this.complete(a)},complete:function(t,r){if("throw"===t.type)throw t.arg;return"break"===t.type||"continue"===t.type?this.next=t.arg:"return"===t.type?(this.rval=this.arg=t.arg,this.method="return",this.next="end"):"normal"===t.type&&r&&(this.next=r),p},finish:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.finallyLoc===t)return this.complete(e.completion,e.afterLoc),j(e),p}},catch:function(t){for(var r=this.tryEntries.length-1;r>=0;--r){var e=this.tryEntries[r];if(e.tryLoc===t){var n=e.completion;if("throw"===n.type){var o=n.arg;j(e)}return o}}throw new Error("illegal catch attempt")},delegateYield:function(t,r,e){return this.delegate={iterator:k(t),resultName:r,nextLoc:e},"next"===this.method&&(this.arg=void 0),p}},t}function n(t,r,e,n,o,i,a){try{var c=t[i](a),u=c.value}catch(t){return void e(t)}c.done?r(u):Promise.resolve(u).then(n,o)}t.exports=function(){var t,r=(t=e().mark((function t(r,n){return e().wrap((function(t){for(;;)switch(t.prev=t.next){case 0:r.postMessage(n);case 1:case"end":return t.stop()}}),t)})),function(){var r=this,e=arguments;return new Promise((function(o,i){var a=t.apply(r,e);function c(t){n(a,o,i,c,u,"next",t)}function u(t){n(a,o,i,c,u,"throw",t)}c(void 0)}))});return function(t,e){return r.apply(this,arguments)}}()},676:t=>{t.exports=function(t){var r,e=t.workerPath,n=t.workerBlobURL;if(Blob&&URL&&n){var o=new Blob(['importScripts("'.concat(e,'");')],{type:"application/javascript"});r=new Worker(URL.createObjectURL(o))}else r=new Worker(e);return r}},100:t=>{t.exports=function(t){t.terminate()}},147:t=>{"use strict";t.exports={i8:"5.1.1"}}},r={};function e(n){var o=r[n];if(void 0!==o)return o.exports;var i=r[n]={id:n,loaded:!1,exports:{}};return t[n].call(i.exports,i,i.exports,e),i.loaded=!0,i.exports}return e.nmd=t=>(t.paths=[],t.children||(t.children=[]),t),e(352)})()));
 //# sourceMappingURL=tesseract.min.js.map
 </script>
-<script>
-(function () {
-'use strict';
+<script type="text/plain" id="text-worker-src">
 /* ===== src/media.js ===== */
 /**
  * 书里的图片 / 视频 / 音频：
@@ -1090,115 +1162,6 @@ function mediaKind(mime) {
   if (/^video\//.test(mime || '')) return 'video';
   if (/^audio\//.test(mime || '')) return 'audio';
   return 'image';
-}
-
-
-/* ===== src/encoding.js ===== */
-/**
- * 文本编码识别与解码。
- * 小说 TXT 常见编码：UTF-8、GBK/GB18030、BIG5、UTF-16。
- * 选错编码是"满屏乱码"最主要的原因，所以这里做多编码试解码 + 打分。
- */
-
-const SUPPORTED_ENCODINGS = [
-  { id: 'auto', label: '自动识别' },
-  { id: 'utf-8', label: 'UTF-8' },
-  { id: 'gb18030', label: 'GBK / GB18030（简体）' },
-  { id: 'big5', label: 'BIG5（繁体）' },
-  { id: 'utf-16le', label: 'UTF-16 LE' },
-  { id: 'utf-16be', label: 'UTF-16 BE' },
-];
-
-// 典型乱码特征字符：GBK 当 UTF-8 读会出现 U+FFFD；UTF-8 当 GBK 读会出现"锟斤拷"一类。
-const MOJIBAKE_CHARS = /[�锟斤拷烫屯珑聯茫芒篓陇搂驴陆Ã Â â€ï¿]/g;
-const CJK = /[㐀-鿿豈-﫿]/g;
-const READABLE = /[　-〿一-鿿＀-￯ -~぀-ヿ\n\r\t]/g;
-
-function countMatches(text, re) {
-  const m = text.match(re);
-  return m ? m.length : 0;
-}
-
-/** 对一次解码结果打分，分数越低越可信 */
-function scoreText(text) {
-  if (!text) return Number.POSITIVE_INFINITY;
-  const sample = text.length > 200000 ? text.slice(0, 200000) : text;
-  const len = sample.length || 1;
-  const bad = countMatches(sample, MOJIBAKE_CHARS);
-  const readable = countMatches(sample, READABLE);
-  const cjk = countMatches(sample, CJK);
-  // 乱码率权重最高；可读字符占比越高越好；中文占比作为轻微加分项
-  return (bad / len) * 100 + (1 - readable / len) * 10 - Math.min(cjk / len, 0.6);
-}
-
-function decodeWith(buffer, encoding) {
-  try {
-    return new TextDecoder(encoding, { fatal: false }).decode(buffer);
-  } catch {
-    return null;
-  }
-}
-
-function detectBom(bytes) {
-  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return 'utf-8';
-  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
-  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
-  return null;
-}
-
-/** UTF-8 合法性严格校验（不合法说明多半是 GBK/BIG5） */
-function isValidUtf8(bytes) {
-  try {
-    new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * @param {ArrayBuffer} buffer 文件内容
- * @param {string} [forced] 指定编码，'auto' 或空则自动识别
- * @returns {{text: string, encoding: string, confident: boolean}}
- */
-function decodeBuffer(buffer, forced) {
-  const bytes = new Uint8Array(buffer);
-  const bom = detectBom(bytes);
-
-  if (forced && forced !== 'auto') {
-    return { text: stripBom(decodeWith(bytes, forced) || ''), encoding: forced, confident: true };
-  }
-  if (bom) {
-    return { text: stripBom(decodeWith(bytes, bom) || ''), encoding: bom, confident: true };
-  }
-  // 大量 0x00 说明是无 BOM 的 UTF-16
-  const head = bytes.subarray(0, Math.min(bytes.length, 4096));
-  let zeros = 0;
-  for (let i = 0; i < head.length; i += 1) if (head[i] === 0) zeros += 1;
-  if (zeros > head.length * 0.25) {
-    let evenZero = 0;
-    for (let i = 0; i < head.length; i += 2) if (head[i] === 0) evenZero += 1;
-    const enc = evenZero > head.length / 4 ? 'utf-16be' : 'utf-16le';
-    return { text: stripBom(decodeWith(bytes, enc) || ''), encoding: enc, confident: true };
-  }
-  if (isValidUtf8(bytes)) {
-    return { text: stripBom(decodeWith(bytes, 'utf-8') || ''), encoding: 'utf-8', confident: true };
-  }
-
-  const candidates = ['gb18030', 'big5', 'utf-8'];
-  let best = null;
-  for (const enc of candidates) {
-    const text = decodeWith(bytes, enc);
-    if (text == null) continue;
-    const score = scoreText(text);
-    if (!best || score < best.score) best = { text, encoding: enc, score };
-  }
-  if (!best) return { text: '', encoding: 'utf-8', confident: false };
-  return { text: stripBom(best.text), encoding: best.encoding, confident: best.score < 1 };
-}
-
-function stripBom(text) {
-  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 
@@ -1325,12 +1288,13 @@ function looksLikeHeading(line, options) {
 function analyzeRules(text, maxTitleLength = DEFAULT_SPLIT_OPTIONS.maxTitleLength) {
   const lines = text.split('\n');
   const counts = new Map(CHAPTER_RULES.map((r) => [r.id, 0]));
+  // 正则只编译一次（原来每一行都重新编译 8 条，大书几十万行时非常慢）
+  const compiled = CHAPTER_RULES.map((rule) => ({ id: rule.id, re: compile(rule.pattern, rule.flags) }));
   for (const raw of lines) {
     const line = raw.trim();
     if (!plausibleTitle(line, maxTitleLength)) continue;
-    for (const rule of CHAPTER_RULES) {
-      const re = compile(rule.pattern, rule.flags);
-      if (re && re.test(line)) counts.set(rule.id, counts.get(rule.id) + 1);
+    for (const rule of compiled) {
+      if (rule.re && rule.re.test(line)) counts.set(rule.id, counts.get(rule.id) + 1);
     }
   }
   return CHAPTER_RULES.map((r) => ({ id: r.id, name: r.name, count: counts.get(r.id) }));
@@ -1762,7 +1726,7 @@ function estimateWrapWidth(lines) {
  * @param {object} splitOptions 分章选项（用于保护标题行不被合并 / 误删）
  * @returns {{text: string, stats: object}}
  */
-function cleanText(raw, options = {}, splitOptions = {}) {
+function cleanText(raw, options = {}, splitOptions = {}, onProgress = null) {
   const opts = { ...CLEAN_DEFAULTS, ...options };
   const splitOpts = { ...DEFAULT_SPLIT_OPTIONS, ...splitOptions };
   const compiled = compileRules({
@@ -1796,7 +1760,11 @@ function cleanText(raw, options = {}, splitOptions = {}) {
 
   // ---- 逐行清洗 ----
   const cleaned = [];
+  const total = lines.length || 1;
+  let lineNo = 0;
   for (const original of lines) {
+    lineNo += 1;
+    if (onProgress && lineNo % 4000 === 0) onProgress((lineNo / total) * 0.75);
     let line = original;
 
     // 图片 / 视频占位标记：原样保留，不参与任何清洗规则
@@ -1855,6 +1823,1008 @@ function cleanText(raw, options = {}, splitOptions = {}) {
     const wrapWidth = estimateWrapWidth(cleaned);
     merged = [];
     for (let i = 0; i < cleaned.length; i += 1) {
+      if (onProgress && i % 6000 === 0) onProgress(0.75 + (i / (cleaned.length || 1)) * 0.2);
+      const trimmed = cleaned[i].trim();
+      if (!trimmed) {
+        merged.push('');
+        continue;
+      }
+      // 规则识别到的标题、以及"疑似标题"（例如只写了 123 的那种）都不参与合并，
+      // 否则漏识别的标题会被粘进正文，后面就再也补不回来了
+      if (isMediaLine(trimmed)
+        || looksLikeHeading(trimmed, headingOpts) || looksLikeLooseHeading(trimmed, splitOpts.maxTitleLength)) {
+        merged.push(trimmed);
+        continue;
+      }
+      let current = trimmed;
+      while (wrapWidth > 0 && i + 1 < cleaned.length) {
+        const next = cleaned[i + 1] ? cleaned[i + 1].trim() : '';
+        if (!next) break;
+        if (isMediaLine(next)) break;
+        if (looksLikeHeading(next, headingOpts) || looksLikeLooseHeading(next, splitOpts.maxTitleLength)) break;
+        if (current.length < wrapWidth) break;
+        if (ENDING_PUNCT.test(current)) break;
+        if (/^[“"「『]/.test(next)) break;
+        current += next;
+        stats.mergedLines += 1;
+        i += 1;
+      }
+      merged.push(current);
+    }
+  }
+
+  // ---- 压缩空行 + 段首缩进 ----
+  const maxBlank = Math.max(0, Number(opts.blankLinesBetweenParagraphs) || 0);
+  const out = [];
+  let blank = 0;
+  for (const line of merged) {
+    if (!line.trim()) {
+      blank += 1;
+      if (blank > maxBlank) {
+        stats.blankLinesRemoved += 1;
+        continue;
+      }
+      out.push('');
+      continue;
+    }
+    blank = 0;
+    const isHeading = isMediaLine(line) || looksLikeHeading(line, headingOpts);
+    if (opts.indentParagraphs && !isHeading) out.push(`　　${line.trim()}`);
+    else out.push(line.trim());
+  }
+
+  while (out.length && !out[0].trim()) out.shift();
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+
+  const result = out.join('\n');
+  stats.finalChars = result.length;
+  stats.finalLines = out.length;
+  return { text: result, stats };
+}
+
+const AD_KEYWORD_LIST = AD_KEYWORDS;
+
+/**
+ * 清洗书名：文件名 / 电子书元信息里常带网址、站点名和推广后缀，
+ * 例如「盘龙(www.biquge.com)【完结】.txt」→「盘龙」。
+ */
+function cleanBookTitle(raw) {
+  let name = String(raw || '').trim();
+  if (!name) return '未命名小说';
+  name = name.replace(/\.(txt|text|epub|pdf|html?|umd|azw3?|mobi)$/i, '');
+  name = name.replace(/[_]+/g, ' ');   // 下划线常被用来拼接站点名
+  // 先去掉整段网址
+  const stats = { urlsRemoved: 0 };
+  name = stripUrls(name, stats);
+  // 括号里只剩站点 / 推广字样的，整块去掉
+  name = name.replace(/[（(【\[「{][^）)】\]」}]{0,40}[）)】\]」}]/g, (block) => {
+    const inner = block.slice(1, -1).trim();
+    if (!inner) return '';   // 括号里原本是网址，去完就空了
+    const siteish = /(网|阁|书屋|书城|书院|书站|书库|书吧|文学|小说|下载|txt|首发|独家|手打|论坛|贴吧|整理|校对|精校|完结|全本|更新|连载|免费|无弹窗)/i;
+    return siteish.test(inner) ? '' : block;
+  });
+  // 常见推广后缀 / 前缀
+  const junk = [
+    '最新章节', '全本', '全集', '完结', '完本', '精校版', '精校', '校对版', '未删减', '珍藏版',
+    'txt下载', 'txt全集下载', 'txt', '电子书', '免费阅读', '手打', '独家首发', '首发', '整理',
+    '小说网', '书屋', '书城', '文学网', 'novel', 'downloads', 'download',
+  ];
+  for (const word of junk) {
+    name = name.replace(new RegExp(`[\\s\\-_—·|~,，。、【】\\[\\]()（）]*${escapeForRegExp(word)}[\\s\\-_—·|~,，。、【】\\[\\]()（）]*`, 'gi'), ' ');
+  }
+  name = name
+    .replace(/[_]+/g, ' ')
+    .replace(/[\s　]{2,}/g, ' ')
+    .replace(/^[\s\-_—·|~,，。、:：]+|[\s\-_—·|~,，。、:：]+$/g, '')
+    .trim();
+  return name || '未命名小说';
+}
+
+function escapeForRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+
+/* ===== src/text-analyze.js ===== */
+/**
+ * 清洗 + 分章的完整流程（纯函数）。
+ * 既能在 Web Worker 里跑（不卡界面），也能在主线程直接调用（Worker 不可用时兜底）。
+ */
+
+
+const EMPTY_STATS = () => ({
+  originalChars: 0, originalLines: 0, urlsRemoved: 0, adLines: 0, garbledLines: 0,
+  mojibakeFixed: 0, mergedLines: 0, blankLinesRemoved: 0, finalChars: 0, finalLines: 0,
+});
+
+/**
+ * @param {{raw: string, native?: Array, useNative?: boolean, cleanOpts: object, splitOpts: object, autoRules?: boolean}} payload
+ * @param {(fraction: number, label?: string) => void} [onProgress]
+ */
+function analyzeText(payload, onProgress) {
+  const report = (p, label) => { if (onProgress) onProgress(Math.max(0, Math.min(1, p)), label); };
+  const cleanOpts = payload.cleanOpts || {};
+  let splitOpts = { ...DEFAULT_SPLIT_OPTIONS, ...(payload.splitOpts || {}) };
+
+  // 新导入的书：先自动挑分章规则
+  if (payload.autoRules) {
+    report(0.02, '识别章节写法…');
+    const ids = suggestRuleIds(payload.raw || '', splitOpts.maxTitleLength);
+    splitOpts = { ...splitOpts, ruleIds: ids.length ? ids : DEFAULT_SPLIT_OPTIONS.ruleIds };
+  }
+
+  let text;
+  let stats;
+  let chapters;
+  let usedFallback = false;
+  let repair = { inserted: 0, filled: [], stillMissing: [] };
+
+  if (payload.useNative && payload.native && payload.native.length) {
+    // 电子书自带目录：逐章清洗，章节结构不变
+    stats = EMPTY_STATS();
+    chapters = [];
+    const total = payload.native.length;
+    payload.native.forEach((c, i) => {
+      if (i % 5 === 0) report(0.05 + (i / total) * 0.85, `清洗第 ${i + 1} / ${total} 章…`);
+      const res = cleanText(c.content, cleanOpts, splitOpts);
+      Object.keys(stats).forEach((k) => { stats[k] += res.stats[k] || 0; });
+      chapters.push({
+        title: c.title, level: 2, content: res.text, charCount: res.text.replace(/\s/g, '').length,
+      });
+    });
+    text = chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n');
+  } else {
+    const cleaned = cleanText(payload.raw || '', cleanOpts, splitOpts,
+      (p) => report(0.05 + p * 0.75, '清洗乱码、删除网址与广告…'));
+    text = cleaned.text;
+    stats = cleaned.stats;
+    report(0.82, '识别章节、补回漏掉的章…');
+    const split = splitChapters(text, splitOpts);
+    chapters = split.chapters;
+    usedFallback = split.usedFallback;
+    repair = split.repair || repair;
+  }
+
+  report(0.94, '统计分章规则…');
+  const ruleStats = analyzeRules(text, splitOpts.maxTitleLength || 40);
+  report(1, '完成');
+  return {
+    text, stats, chapters, usedFallback, repair, ruleStats, ruleIds: splitOpts.ruleIds,
+  };
+}
+
+
+/* ===== src/text-worker.js ===== */
+/**
+ * 后台线程：清洗、分章这类重活放在这里跑，界面（进度数字、小游戏）就不会被卡住。
+ */
+
+self.onmessage = (event) => {
+  const { id, payload } = event.data || {};
+  try {
+    const result = analyzeText(payload, (p, label) => self.postMessage({ id, type: 'progress', p, label }));
+    self.postMessage({ id, type: 'done', result });
+  } catch (err) {
+    self.postMessage({ id, type: 'error', message: String((err && err.message) || err) });
+  }
+};
+
+</script>
+<script>
+(function () {
+'use strict';
+/* ===== src/media.js ===== */
+/**
+ * 书里的图片 / 视频 / 音频：
+ * 导入时把文件本体存进 IndexedDB，正文里只留一行占位标记 [[media:KEY]]，
+ * 阅读时再把标记换成 <img> / <video> / <audio>。
+ * 标记是纯 ASCII、单独成行，清洗、排版、分章、朗读都会跳过它。
+ */
+
+const MEDIA_LINE = /^\s*\[\[media:([A-Za-z0-9_-]{1,40})\]\]\s*$/;
+
+const mediaToken = (key) => `[[media:${key}]]`;
+
+function isMediaLine(line) {
+  return MEDIA_LINE.test(String(line || ''));
+}
+
+function mediaKeyOf(line) {
+  const m = String(line || '').match(MEDIA_LINE);
+  return m ? m[1] : null;
+}
+
+/** 导出纯文本 / 预览时，把标记换成人能看懂的文字 */
+function describeMediaTokens(text, label = '［图片］') {
+  return String(text || '').replace(/\[\[media:[A-Za-z0-9_-]{1,40}\]\]/g, label);
+}
+
+/** 按扩展名猜 MIME */
+function guessMime(path) {
+  const ext = String(path || '').toLowerCase().split('?')[0].split('#')[0].split('.').pop();
+  return {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+    svg: 'image/svg+xml', bmp: 'image/bmp', avif: 'image/avif',
+    mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg', mov: 'video/quicktime',
+    mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg', wav: 'audio/wav',
+  }[ext] || 'application/octet-stream';
+}
+
+function mediaKind(mime) {
+  if (/^video\//.test(mime || '')) return 'video';
+  if (/^audio\//.test(mime || '')) return 'audio';
+  return 'image';
+}
+
+
+/* ===== src/encoding.js ===== */
+/**
+ * 文本编码识别与解码。
+ * 小说 TXT 常见编码：UTF-8、GBK/GB18030、BIG5、UTF-16。
+ * 选错编码是"满屏乱码"最主要的原因，所以这里做多编码试解码 + 打分。
+ */
+
+const SUPPORTED_ENCODINGS = [
+  { id: 'auto', label: '自动识别' },
+  { id: 'utf-8', label: 'UTF-8' },
+  { id: 'gb18030', label: 'GBK / GB18030（简体）' },
+  { id: 'big5', label: 'BIG5（繁体）' },
+  { id: 'utf-16le', label: 'UTF-16 LE' },
+  { id: 'utf-16be', label: 'UTF-16 BE' },
+];
+
+// 典型乱码特征字符：GBK 当 UTF-8 读会出现 U+FFFD；UTF-8 当 GBK 读会出现"锟斤拷"一类。
+const MOJIBAKE_CHARS = /[�锟斤拷烫屯珑聯茫芒篓陇搂驴陆Ã Â â€ï¿]/g;
+const CJK = /[㐀-鿿豈-﫿]/g;
+const READABLE = /[　-〿一-鿿＀-￯ -~぀-ヿ\n\r\t]/g;
+
+function countMatches(text, re) {
+  const m = text.match(re);
+  return m ? m.length : 0;
+}
+
+/** 对一次解码结果打分，分数越低越可信 */
+function scoreText(text) {
+  if (!text) return Number.POSITIVE_INFINITY;
+  const sample = text.length > 200000 ? text.slice(0, 200000) : text;
+  const len = sample.length || 1;
+  const bad = countMatches(sample, MOJIBAKE_CHARS);
+  const readable = countMatches(sample, READABLE);
+  const cjk = countMatches(sample, CJK);
+  // 乱码率权重最高；可读字符占比越高越好；中文占比作为轻微加分项
+  return (bad / len) * 100 + (1 - readable / len) * 10 - Math.min(cjk / len, 0.6);
+}
+
+function decodeWith(buffer, encoding) {
+  try {
+    return new TextDecoder(encoding, { fatal: false }).decode(buffer);
+  } catch {
+    return null;
+  }
+}
+
+function detectBom(bytes) {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return 'utf-8';
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
+  return null;
+}
+
+/** UTF-8 合法性严格校验（不合法说明多半是 GBK/BIG5） */
+function isValidUtf8(bytes) {
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {ArrayBuffer} buffer 文件内容
+ * @param {string} [forced] 指定编码，'auto' 或空则自动识别
+ * @returns {{text: string, encoding: string, confident: boolean}}
+ */
+function decodeBuffer(buffer, forced) {
+  const bytes = new Uint8Array(buffer);
+  const bom = detectBom(bytes);
+
+  if (forced && forced !== 'auto') {
+    return { text: stripBom(decodeWith(bytes, forced) || ''), encoding: forced, confident: true };
+  }
+  if (bom) {
+    return { text: stripBom(decodeWith(bytes, bom) || ''), encoding: bom, confident: true };
+  }
+  // 大量 0x00 说明是无 BOM 的 UTF-16
+  const head = bytes.subarray(0, Math.min(bytes.length, 4096));
+  let zeros = 0;
+  for (let i = 0; i < head.length; i += 1) if (head[i] === 0) zeros += 1;
+  if (zeros > head.length * 0.25) {
+    let evenZero = 0;
+    for (let i = 0; i < head.length; i += 2) if (head[i] === 0) evenZero += 1;
+    const enc = evenZero > head.length / 4 ? 'utf-16be' : 'utf-16le';
+    return { text: stripBom(decodeWith(bytes, enc) || ''), encoding: enc, confident: true };
+  }
+  if (isValidUtf8(bytes)) {
+    return { text: stripBom(decodeWith(bytes, 'utf-8') || ''), encoding: 'utf-8', confident: true };
+  }
+
+  const candidates = ['gb18030', 'big5', 'utf-8'];
+  let best = null;
+  for (const enc of candidates) {
+    const text = decodeWith(bytes, enc);
+    if (text == null) continue;
+    const score = scoreText(text);
+    if (!best || score < best.score) best = { text, encoding: enc, score };
+  }
+  if (!best) return { text: '', encoding: 'utf-8', confident: false };
+  return { text: stripBom(best.text), encoding: best.encoding, confident: best.score < 1 };
+}
+
+function stripBom(text) {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+
+/* ===== src/chapters.js ===== */
+/**
+ * 章节切分：内置多套常见标题规则，可任意组合，也支持自定义正则。
+ * 识别不到时退化为"按行数自动分章"，保证任何文本都能跳章阅读。
+ */
+
+/** 内置规则。pattern 为字符串，运行时编译（方便存进 IndexedDB / localStorage） */
+const CHAPTER_RULES = [
+  {
+    id: 'cn-volume',
+    name: '第N卷 / 第N部 / 第N篇',
+    level: 1,
+    pattern: '^第\\s*[0-9零一二三四五六七八九十百千两万〇]{1,12}\\s*[卷部篇](?![章节])(?:[\\s:：、.．-]*\\S.{0,30})?$',
+  },
+  {
+    id: 'cn-chapter',
+    name: '第N章 / 第N节 / 第N回 / 第N话',
+    level: 2,
+    pattern: '^第\\s*[0-9零一二三四五六七八九十百千两万〇]{1,12}\\s*[章节節回话話集幕折](?:[\\s:：、.．-]*\\S.{0,30})?$',
+  },
+  {
+    id: 'cn-special',
+    name: '楔子 / 序章 / 番外 / 后记 等特殊章',
+    level: 2,
+    pattern: '^(?:楔\\s*子|序\\s*章|序\\s*言|序|引\\s*子|前\\s*言|后\\s*记|後\\s*記|尾\\s*声|尾\\s*聲|终\\s*章|終\\s*章|大结局|大結局|番\\s*外(?:篇)?|作者[的之]?话|作者[的之]?話|新书感言|完本感言)(?:[\\s:：、.．-]*\\S.{0,30})?$',
+  },
+  {
+    id: 'cn-plain-number',
+    name: '一、xxx / 1. xxx（编号标题）',
+    level: 2,
+    pattern: '^(?:[0-9]{1,4}|[零一二三四五六七八九十百千两〇]{1,10})\\s*[、.．,，:：]\\s*\\S.{0,30}$',
+  },
+  {
+    id: 'cn-bare-number',
+    name: '纯数字独立成行（1 / 001）',
+    level: 2,
+    pattern: '^[0-9]{1,4}$',
+  },
+  {
+    id: 'bracket-number',
+    name: '（一） / 【第3章】 / [1] 括号编号',
+    level: 2,
+    pattern: '^[（(【\\[]\\s*(?:第)?\\s*[0-9零一二三四五六七八九十百千两〇]{1,10}\\s*(?:[章节回话卷])?\\s*[)）】\\]](?:[\\s:：、.．-]*\\S.{0,30})?$',
+  },
+  {
+    id: 'en-chapter',
+    name: 'Chapter 1 / Part I / Episode 3',
+    level: 2,
+    pattern: '^(?:chapter|chap\\.?|part|section|episode|book|volume)\\s+(?:[0-9]{1,4}|[ivxlcdm]{1,8})\\b.{0,40}$',
+    flags: 'i',
+  },
+  {
+    id: 'star-separator',
+    name: '★ / ※ / ◆ 等符号包裹的标题',
+    level: 2,
+    pattern: '^[★☆※◆◇●○■□§*=-]{1,6}\\s*\\S.{0,30}?\\s*[★☆※◆◇●○■□§*=-]{1,6}$',
+  },
+];
+
+const RULE_MAP = new Map(CHAPTER_RULES.map((r) => [r.id, r]));
+
+const DEFAULT_RULE_IDS = ['cn-volume', 'cn-chapter', 'cn-special'];
+
+const DEFAULT_SPLIT_OPTIONS = {
+  ruleIds: DEFAULT_RULE_IDS.slice(),
+  customPattern: '',
+  maxTitleLength: 40,
+  fallbackLines: 300,
+  autoFallback: true,
+  repairMissing: true,  // 按章节号连续性把"漏掉的章"从正文里补切出来
+  repairMaxGap: 100,    // 单个缺口最多补多少章，避免异常文本被切碎
+};
+
+function compile(pattern, flags) {
+  try {
+    return new RegExp(pattern, flags || '');
+  } catch {
+    return null;
+  }
+}
+
+/** 章节标题一般很短、不带成段的句读 */
+function plausibleTitle(line, maxTitleLength) {
+  if (!line) return false;
+  if (line.length > maxTitleLength) return false;
+  if (/[。；！？…]/.test(line.slice(0, -1))) return false;
+  if (/["“”]/.test(line)) return false;
+  return true;
+}
+
+function compileRules(options = {}) {
+  const opts = { ...DEFAULT_SPLIT_OPTIONS, ...options };
+  const rules = [];
+  for (const id of opts.ruleIds || []) {
+    const rule = RULE_MAP.get(id);
+    if (!rule) continue;
+    const re = compile(rule.pattern, rule.flags);
+    if (re) rules.push({ ...rule, re });
+  }
+  if (opts.customPattern && opts.customPattern.trim()) {
+    const re = compile(opts.customPattern.trim(), 'i');
+    if (re) rules.push({ id: 'custom', name: '自定义正则', level: 2, re });
+  }
+  return rules;
+}
+
+/** 判断一行是否像章节标题（清洗器也会用它，避免把标题跟正文粘到一起） */
+function looksLikeHeading(line, options) {
+  const text = (line || '').trim();
+  if (!text) return false;
+  const opts = { ...DEFAULT_SPLIT_OPTIONS, ...(options || {}) };
+  if (!plausibleTitle(text, opts.maxTitleLength)) return false;
+  const rules = options && options.__compiled ? options.__compiled : compileRules({
+    ...opts,
+    ruleIds: opts.ruleIds && opts.ruleIds.length ? opts.ruleIds : ['cn-volume', 'cn-chapter', 'cn-special', 'en-chapter'],
+  });
+  return rules.some((r) => r.re.test(text));
+}
+
+/** 统计每条规则在文本中的命中次数，用于"自动识别分章方式" */
+function analyzeRules(text, maxTitleLength = DEFAULT_SPLIT_OPTIONS.maxTitleLength) {
+  const lines = text.split('\n');
+  const counts = new Map(CHAPTER_RULES.map((r) => [r.id, 0]));
+  // 正则只编译一次（原来每一行都重新编译 8 条，大书几十万行时非常慢）
+  const compiled = CHAPTER_RULES.map((rule) => ({ id: rule.id, re: compile(rule.pattern, rule.flags) }));
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!plausibleTitle(line, maxTitleLength)) continue;
+    for (const rule of compiled) {
+      if (rule.re && rule.re.test(line)) counts.set(rule.id, counts.get(rule.id) + 1);
+    }
+  }
+  return CHAPTER_RULES.map((r) => ({ id: r.id, name: r.name, count: counts.get(r.id) }));
+}
+
+/** 自动挑选规则组合：优先中文章节体系，其次英文，最后编号类 */
+function suggestRuleIds(text, maxTitleLength) {
+  const stats = new Map(analyzeRules(text, maxTitleLength).map((s) => [s.id, s.count]));
+  const n = (id) => stats.get(id) || 0;
+  const picked = [];
+  // 先挑主章节规则
+  if (n('cn-chapter') >= 2) picked.push('cn-chapter');
+  else if (n('en-chapter') >= 2) picked.push('en-chapter');
+  else if (n('bracket-number') >= 3) picked.push('bracket-number');
+  else if (n('cn-plain-number') >= 3) picked.push('cn-plain-number');
+  else if (n('star-separator') >= 3) picked.push('star-separator');
+  else if (n('cn-bare-number') >= 3) picked.push('cn-bare-number');
+  else if (n('cn-chapter') >= 1) picked.push('cn-chapter');
+  else if (n('en-chapter') >= 1) picked.push('en-chapter');
+  // 再补上分卷与楔子/番外之类的特殊章
+  if (n('cn-volume') >= 1) picked.push('cn-volume');
+  if (n('cn-special') >= 1) picked.push('cn-special');
+  return picked;
+}
+
+function makeChapter(title, lines, level, startLine) {
+  const content = lines.join('\n').replace(/^\n+|\n+$/g, '');
+  return {
+    title: title || '正文',
+    level: level || 2,
+    startLine,
+    content,
+    charCount: content.replace(/\s/g, '').length,
+  };
+}
+
+/** 没有任何标题时，按行数均匀切分，保证仍可跳章 */
+function fallbackSplit(text, linesPerChapter = DEFAULT_SPLIT_OPTIONS.fallbackLines) {
+  const lines = text.split('\n');
+  const chapters = [];
+  const size = Math.max(20, linesPerChapter);
+  for (let i = 0; i < lines.length; i += size) {
+    const slice = lines.slice(i, i + size);
+    const firstText = slice.find((l) => l.trim()) || '';
+    const hint = firstText.trim().slice(0, 16);
+    chapters.push(
+      makeChapter(`第${chapters.length + 1}节${hint ? ` ${hint}…` : ''}`, slice, 2, i),
+    );
+  }
+  return chapters.length ? chapters : [makeChapter('正文', lines, 2, 0)];
+}
+
+/**
+ * 主入口：把整本文本切成章节数组。
+ * @returns {{chapters: Array, ruleIds: string[], usedFallback: boolean}}
+ */
+function splitChapters(text, options = {}) {
+  const opts = { ...DEFAULT_SPLIT_OPTIONS, ...options };
+  const rules = compileRules(opts);
+  const lines = text.split('\n');
+  const chapters = [];
+
+  if (rules.length) {
+    let buffer = [];
+    let title = null;
+    let level = 2;
+    let start = 0;
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i].trim();
+      let matched = null;
+      if (plausibleTitle(line, opts.maxTitleLength)) {
+        matched = rules.find((r) => r.re.test(line)) || null;
+      }
+      if (matched) {
+        if (title !== null || buffer.some((l) => l.trim())) {
+          chapters.push(makeChapter(title === null ? '开篇' : title, buffer, title === null ? 2 : level, start));
+        }
+        title = line;
+        level = matched.level;
+        start = i;
+        buffer = [];
+      } else {
+        buffer.push(lines[i]);
+      }
+    }
+    if (title !== null || buffer.some((l) => l.trim())) {
+      chapters.push(makeChapter(title === null ? '正文' : title, buffer, title === null ? 2 : level, start));
+    }
+  }
+
+  const realChapters = chapters.filter((c) => c.charCount > 0 || c.level === 1);
+  if (realChapters.length >= 2) {
+    const repair = opts.repairMissing
+      ? repairChapters(realChapters, opts)
+      : { chapters: realChapters, inserted: 0, filled: [], stillMissing: [] };
+    return {
+      chapters: repair.chapters,
+      ruleIds: rules.map((r) => r.id),
+      usedFallback: false,
+      repair: { inserted: repair.inserted, filled: repair.filled, stillMissing: repair.stillMissing },
+    };
+  }
+  if (opts.autoFallback) {
+    return {
+      chapters: fallbackSplit(text, opts.fallbackLines),
+      ruleIds: [],
+      usedFallback: true,
+      repair: { inserted: 0, filled: [], stillMissing: [] },
+    };
+  }
+  return {
+    chapters: realChapters.length ? realChapters : [makeChapter('正文', lines, 2, 0)],
+    ruleIds: rules.map((r) => r.id),
+    usedFallback: false,
+    repair: { inserted: 0, filled: [], stillMissing: [] },
+  };
+}
+
+/* =========================================================
+ * 章节号解析 与 缺章补切
+ * 场景：整本大部分章节用「第123章」，个别章节写成「123」「(123)」「第123節」等
+ * 其它写法，没被主规则匹配到，于是那几章被并进了上一章里。
+ * 这里按章节号的连续性找出缺口，再用宽松规则回到正文里把它们切出来。
+ * =======================================================*/
+
+const CN_DIGITS = { 零: 0, 〇: 0, 一: 1, 壹: 1, 二: 2, 贰: 2, 两: 2, 三: 3, 叁: 3, 四: 4, 肆: 4, 五: 5, 伍: 5, 六: 6, 陆: 6, 七: 7, 柒: 7, 八: 8, 捌: 8, 九: 9, 玖: 9 };
+const CN_UNITS = { 十: 10, 拾: 10, 百: 100, 佰: 100, 千: 1000, 仟: 1000, 万: 10000 };
+// 数字后面跟这些字，多半是"2008年""三十岁"这类正文，不是章节号
+const NOT_CHAPTER_SUFFIX = /^[年月日号时分秒岁个人只条种次件元米克斤章回话節节]?[年月日号时分秒岁]/;
+
+/** 中文 / 全角 / 阿拉伯数字 → 整数，无法解析返回 null */
+function cnToNumber(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const half = s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  if (/^[0-9]{1,6}$/.test(half)) return Number(half);
+  let total = 0;
+  let section = 0;
+  let num = 0;
+  for (const ch of s) {
+    if (ch in CN_DIGITS) {
+      num = CN_DIGITS[ch];
+    } else if (ch in CN_UNITS) {
+      const unit = CN_UNITS[ch];
+      if (unit === 10000) {
+        section = (section + num) * unit;
+        total += section;
+        section = 0;
+      } else {
+        section += (num === 0 ? 1 : num) * unit;
+      }
+      num = 0;
+    } else {
+      return null;
+    }
+  }
+  const value = total + section + num;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** 从标题行里解析章节号（标准写法） */
+function parseChapterNumber(title) {
+  const text = (title || '').trim();
+  if (!text) return null;
+  let m = text.match(/第\s*([0-9０-９零〇一二三四五六七八九十百千两万壹贰叁肆伍陆柒捌玖拾佰仟]{1,12})\s*[章节節回话話集幕折]/);
+  if (m) return cnToNumber(m[1]);
+  m = text.match(/^(?:chapter|chap\.?|part|episode|section)\s*([0-9]{1,6})\b/i);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+/**
+ * 宽松解析：这一行"看起来是第几章"。
+ * 覆盖 `123`、`123.`、`(123)`、`【123】`、`123 标题`、`第123節`、`一二三、标题` 等写法。
+ */
+function looseChapterNumber(line, maxTitleLength = 60) {
+  const text = (line || '').trim();
+  if (!text || text.length > maxTitleLength) return null;
+  const strict = parseChapterNumber(text);
+  if (strict != null) return strict;
+
+  const body = text.replace(/^[\s　（(【\[「『<《]+/, '').replace(/^第/, '');
+  let m = body.match(/^([0-9０-９]{1,6})\s*(?:[章节節回话話集幕折])?\s*([)）】\]」』>》]|[、.．,，:：\-—–~～]|\s|$)(.*)$/);
+  if (m) {
+    const rest = `${m[2] || ''}${m[3] || ''}`.trim();
+    if (NOT_CHAPTER_SUFFIX.test(rest)) return null;
+    return cnToNumber(m[1]);
+  }
+  m = body.match(/^([零〇一二三四五六七八九十百千两壹贰叁肆伍陆柒捌玖拾佰仟]{1,10})\s*(?:[章节節回话話集幕折])?\s*(?:[)）】\]」』]|[、.．,，:：\-—–]|\s|$)/);
+  if (m) return cnToNumber(m[1]);
+  return null;
+}
+
+/** 用于排版时保护"没被规则识别出来的疑似标题行"，避免被合并进正文 */
+function looksLikeLooseHeading(line, maxTitleLength = 40) {
+  const text = (line || '').trim();
+  if (!text || text.length > maxTitleLength) return false;
+  if (/[。！？；]$/.test(text)) return false;
+  if (/["“”]/.test(text)) return false;
+  return looseChapterNumber(text, maxTitleLength) != null;
+}
+
+function sliceChapter(source, lines, from, to, title, level, repaired) {
+  const chapter = makeChapter(title, lines.slice(from, to), level, (source.startLine || 0) + from);
+  if (repaired) chapter.repaired = true;
+  return chapter;
+}
+
+/**
+ * 在一章正文里找出这些章节号对应的标题行，并切成多章。
+ * @returns {{parts: Array, found: number[]}}
+ */
+function splitByMissingNumbers(chapter, wanted, maxTitleLength) {
+  const lines = chapter.content.split('\n');
+  const boundaries = [];
+  let k = 0;
+  for (let i = 0; i < lines.length && k < wanted.length; i += 1) {
+    const num = looseChapterNumber(lines[i], maxTitleLength);
+    if (num == null) continue;
+    if (num === wanted[k]) {
+      boundaries.push({ line: i, num, title: lines[i].trim() });
+      k += 1;
+    }
+  }
+  if (!boundaries.length) return { parts: [chapter], found: [] };
+
+  const parts = [];
+  const head = sliceChapter(chapter, lines, 0, boundaries[0].line, chapter.title, chapter.level, false);
+  parts.push(head);
+  for (let b = 0; b < boundaries.length; b += 1) {
+    const start = boundaries[b].line;
+    const end = b + 1 < boundaries.length ? boundaries[b + 1].line : lines.length;
+    parts.push(sliceChapter(chapter, lines, start + 1, end, boundaries[b].title, 2, true));
+  }
+  return { parts, found: boundaries.map((b) => b.num) };
+}
+
+/**
+ * 按章节号连续性修复缺章。
+ * @param {Array} chapters splitChapters 的结果
+ * @returns {{chapters: Array, inserted: number, filled: number[], stillMissing: number[]}}
+ */
+function repairChapters(chapters, options = {}) {
+  const opts = { ...DEFAULT_SPLIT_OPTIONS, ...options };
+  const maxTitleLength = Math.max(opts.maxTitleLength || 40, 60);
+  const maxGap = opts.repairMaxGap || 100;
+  const seqs = chapters.map((c) => (c.level === 1 ? null : parseChapterNumber(c.title)));
+  const out = [];
+  const filled = [];
+  const stillMissing = [];
+
+  for (let i = 0; i < chapters.length; i += 1) {
+    const chapter = chapters[i];
+    const seq = seqs[i];
+    if (seq == null) { out.push(chapter); continue; }
+
+    let j = i + 1;
+    while (j < chapters.length && seqs[j] == null) j += 1;
+    const nextSeq = j < chapters.length ? seqs[j] : null;
+    if (nextSeq == null || nextSeq - seq <= 1 || nextSeq - seq > maxGap) { out.push(chapter); continue; }
+
+    const wanted = [];
+    for (let n = seq + 1; n < nextSeq; n += 1) wanted.push(n);
+    const { parts, found } = splitByMissingNumbers(chapter, wanted, maxTitleLength);
+    out.push(...parts);
+    filled.push(...found);
+    for (const n of wanted) if (!found.includes(n)) stillMissing.push(n);
+  }
+
+  return {
+    chapters: out,
+    inserted: out.length - chapters.length,
+    filled,
+    stillMissing,
+  };
+}
+
+
+/* ===== src/cleaner.js ===== */
+/**
+ * 正文清洗 + 自动排版。
+ * 目标：把从各种小说站扒下来的 TXT 变成干净可读的正文——
+ *  1) 删除推广网址（含全角、空格、"点/dot"混淆写法）
+ *  2) 删除站点广告行、水印行、分隔符行
+ *  3) 修复 / 丢弃乱码
+ *  4) 合并被硬换行打断的段落、压缩空行、统一段首缩进
+ */
+
+
+const CLEAN_DEFAULTS = {
+  removeUrls: true,        // 删除网址
+  removeAds: true,         // 删除广告 / 水印行
+  removeSeparators: true,  // 删除 ==== ---- 之类的分隔线
+  fixMojibake: true,       // 修复 UTF-8 被按 Latin-1 读出的乱码
+  dropGarbledLines: true,  // 丢弃整行乱码
+  mergeWrappedLines: true, // 合并硬换行导致的断句
+  normalizeSpaces: true,   // 统一空白、去行尾空格
+  fullWidthPunct: false,   // 半角标点转全角
+  indentParagraphs: true,  // 段首缩进两个全角空格
+  blankLinesBetweenParagraphs: 1,
+  extraAdKeywords: [],     // 用户自定义要删除的关键词
+};
+
+// 用 new RegExp 写不可见字符，避免源码里出现真正的控制字符
+const ZERO_WIDTH = new RegExp('[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]', 'g');
+const CONTROL = new RegExp('[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]', 'g');
+const NON_ASCII = new RegExp('[^\\u0000-\\u007F]');
+const CJK_OR_ASCII = new RegExp(
+  '[\\u0020-\\u007E\\u3000-\\u303F\\u3040-\\u30FF\\u4E00-\\u9FFF\\uAC00-\\uD7AF\\uFF00-\\uFFEF]',
+);
+const HAS_CJK = new RegExp('[\\u4E00-\\u9FFF]');
+const SPACE_RUN = /[  　]{2,}/g;
+const LEADING_SPACE = /^[\s　]+/;
+const TRAILING_SPACE = /[\s　]+$/;
+
+/** 各种形态的网址 */
+const URL_PATTERNS = [
+  // 邮箱
+  /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/gi,
+  // 协议开头
+  /(?:https?|ftp|thunder|ed2k):\/\/[^\s，。！？、；："'“”‘’）】》]+/gi,
+  // www. / wap. / m. 开头
+  /(?<![a-z0-9])(?:www|wap|m|3w|bbs|book|txt|www\d)[.．。][a-z0-9-]+(?:[.．。][a-z0-9-]{2,})+(?:\/[^\s，。！？"'）】》]*)?/gi,
+  // 裸域名 + 常见顶级域
+  /(?<![a-z0-9])[a-z0-9-]{2,}(?:[.．。][a-z0-9-]{2,})*[.．。](?:com|cn|net|org|cc|xyz|top|info|tv|me|la|biz|vip|shop|club|site|online|pro|ink|fun|wang|ltd|co|io|us|hk|tw|mobi|icu|space)(?:\.[a-z]{2})?\b(?:\/[^\s，。！？"'）】》]*)?/gi,
+  // 全角网址 ｗｗｗ．ｘｘ．ｃｏｍ
+  /[ｗＷ]{2,3}[.．。][ａ-ｚＡ-Ｚ０-９－]+(?:[.．。][ａ-ｚＡ-Ｚ０-９－]+)+/g,
+  // 混淆写法：w w w . x x . c o m
+  /\bw\s*[.．。点點]?\s*w\s*[.．。点點]?\s*w\s*[.．。点點\s]\s*[a-z0-9\s]{2,20}[.．。点點\s]\s*(?:com|cn|net|org|cc|tv|me|xyz)\b/gi,
+  // 混淆写法：piaotian点com
+  /[a-z0-9-]{2,}\s*(?:点|點|dot|\[点\]|【点】)\s*(?:com|cn|net|org|cc|tv|me|xyz)\b/gi,
+];
+
+/** 广告 / 水印关键词 */
+const AD_KEYWORDS = [
+  '最新章节', '最新章節', '更新最快', '更新最新', '无弹窗', '無彈窗', '免费阅读', '免費閱讀',
+  '手机阅读', '手機閱讀', '手机版', '请记住本站', '请记住', '记住本站', '记住网址', '请收藏',
+  '收藏本站', '本站域名', '一秒记住', '一秒記住', '看正版', '正版首发', '首发', '首發',
+  '独家发布', '獨家發佈', '全文阅读', '全文閱讀', '小说网', '小說網', '小说阅读网', '文学网',
+  '书友', '書友', '网友上传', '手打', 'txt下载', 'txt电子书', 'txt全集', '电子书下载',
+  '本书由', '本文由', '整理制作', '仅供交流', '仅供试阅', '请支持正版', '支持正版', '版权归',
+  '转载', '轉載', '章节内容开始', '章节报错', '举报错误', '推荐本书', '加入书签', '返回目录',
+  '上一页', '下一页', '上一頁', '下一頁', '扫码', '扫描二维码', '公众号', '微信', 'QQ群',
+  '广告', '廣告', '书迷楼', '笔趣', '飘天', '顶点小说', '八一中文', '追书',
+];
+
+const SEPARATOR_LINE = /^[\s\-=_*~·—…＝＿※★☆◆◇●○■□▲△+#|/\\.。、,，:：;；!！?？'"“”‘’()（）\[\]【】<>《》]+$/;
+const MOJIBAKE_HINT = new RegExp('[\\u00C2-\\u00F4][\\u0080-\\u00BF]');
+const MOJIBAKE_TOKENS = /锟斤拷|烫烫烫|屯屯屯|嚙|锘匡|锛屾|鏄庣|�/;
+const ENDING_PUNCT = /[。！？…”』」》）】.!?"'’~～—]$/;
+
+function stripUrls(line, stats) {
+  let out = line;
+  for (const re of URL_PATTERNS) {
+    re.lastIndex = 0;
+    out = out.replace(re, () => {
+      stats.urlsRemoved += 1;
+      return '';
+    });
+  }
+  return out;
+}
+
+/** UTF-8 字节被当成 Latin-1 解码后的经典乱码（Ã©、â€œ），尝试还原 */
+function tryFixMojibake(line) {
+  // UTF-8 多字节序列被逐字节当成 Latin-1：高位字符后面跟着 U+0080-U+00BF
+  if (!MOJIBAKE_HINT.test(line)) return line;
+  try {
+    const bytes = new Uint8Array(line.length);
+    for (let i = 0; i < line.length; i += 1) {
+      const code = line.charCodeAt(i);
+      if (code > 0xff) return line;
+      bytes[i] = code;
+    }
+    const fixed = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    // 只有还原出中日韩文字才认为修复成功，避免破坏正常的西文
+    return HAS_CJK.test(fixed) ? fixed : line;
+  } catch {
+    return line;
+  }
+}
+
+/** 整行乱码判定：可读字符占比过低，或包含典型乱码串 */
+function isGarbledLine(line) {
+  const text = line.trim();
+  if (!text) return false;
+  if (MOJIBAKE_TOKENS.test(text)) return true;
+  const chars = [...text];
+  if (chars.length < 4) return false;
+  let readable = 0;
+  for (const ch of chars) if (CJK_OR_ASCII.test(ch)) readable += 1;
+  const ratio = readable / chars.length;
+  if (ratio < 0.7) return true;
+  if (!HAS_CJK.test(text) && NON_ASCII.test(text) && ratio < 0.9) return true;
+  return false;
+}
+
+function isAdLine(line, keywords) {
+  const text = line.trim();
+  if (!text) return false;
+  if (text.length > 60) return false;
+  const lower = text.toLowerCase();
+  return keywords.some((k) => k && lower.includes(k.toLowerCase()));
+}
+
+function toFullWidthPunct(line) {
+  return line
+    .replace(/,(?=[^\d]|$)/g, '，')
+    .replace(/;/g, '；')
+    .replace(/!/g, '！')
+    .replace(/\?/g, '？')
+    .replace(/:(?=[^\d]|$)/g, '：')
+    .replace(/\.{3,}/g, '……');
+}
+
+/** 估算原文的硬换行宽度（用于判断某行是否被截断） */
+function estimateWrapWidth(lines) {
+  const lens = lines.map((l) => l.trim().length).filter((n) => n > 0).sort((a, b) => a - b);
+  if (lens.length < 8) return 0;
+  const p90 = lens[Math.floor(lens.length * 0.9)];
+  return p90 >= 20 ? Math.max(20, Math.floor(p90 * 0.72)) : 0;
+}
+
+/**
+ * 主入口
+ * @param {string} raw 原始文本
+ * @param {object} options 清洗选项
+ * @param {object} splitOptions 分章选项（用于保护标题行不被合并 / 误删）
+ * @returns {{text: string, stats: object}}
+ */
+function cleanText(raw, options = {}, splitOptions = {}, onProgress = null) {
+  const opts = { ...CLEAN_DEFAULTS, ...options };
+  const splitOpts = { ...DEFAULT_SPLIT_OPTIONS, ...splitOptions };
+  const compiled = compileRules({
+    ...splitOpts,
+    ruleIds: splitOpts.ruleIds && splitOpts.ruleIds.length
+      ? splitOpts.ruleIds
+      : ['cn-volume', 'cn-chapter', 'cn-special', 'en-chapter'],
+  });
+  const headingOpts = { ...splitOpts, __compiled: compiled };
+
+  const stats = {
+    originalChars: raw.length,
+    originalLines: 0,
+    urlsRemoved: 0,
+    adLines: 0,
+    garbledLines: 0,
+    mojibakeFixed: 0,
+    mergedLines: 0,
+    blankLinesRemoved: 0,
+    finalChars: 0,
+    finalLines: 0,
+  };
+
+  const normalized = raw.replace(/\r\n?/g, '\n').replace(ZERO_WIDTH, '').replace(CONTROL, '');
+  const lines = normalized.split('\n');
+  stats.originalLines = lines.length;
+
+  const keywords = opts.removeAds
+    ? AD_KEYWORDS.concat(opts.extraAdKeywords || []).filter(Boolean)
+    : (opts.extraAdKeywords || []).filter(Boolean);
+
+  // ---- 逐行清洗 ----
+  const cleaned = [];
+  const total = lines.length || 1;
+  let lineNo = 0;
+  for (const original of lines) {
+    lineNo += 1;
+    if (onProgress && lineNo % 4000 === 0) onProgress((lineNo / total) * 0.75);
+    let line = original;
+
+    // 图片 / 视频占位标记：原样保留，不参与任何清洗规则
+    if (isMediaLine(line)) {
+      cleaned.push(line.trim());
+      continue;
+    }
+
+    if (opts.fixMojibake) {
+      const fixed = tryFixMojibake(line);
+      if (fixed !== line) {
+        stats.mojibakeFixed += 1;
+        line = fixed;
+      }
+    }
+
+    const isHeading = looksLikeHeading(line, headingOpts);
+
+    if (opts.removeUrls && !isHeading) {
+      const before = line;
+      line = stripUrls(line, stats);
+      // 整行本来就是网址（去掉后只剩标点）→ 整行丢弃
+      if (before.trim() && !line.replace(/[\s　\-—_|·:：,，.。()（）\[\]【】<>《》]/g, '')) {
+        continue;
+      }
+    }
+
+    if (!isHeading && keywords.length && isAdLine(line, keywords)) {
+      stats.adLines += 1;
+      continue;
+    }
+
+    if (opts.removeSeparators && !isHeading && line.trim() && SEPARATOR_LINE.test(line.trim())) {
+      stats.adLines += 1;
+      continue;
+    }
+
+    if (opts.dropGarbledLines && !isHeading && isGarbledLine(line)) {
+      stats.garbledLines += 1;
+      continue;
+    }
+
+    if (opts.normalizeSpaces) {
+      line = line.replace(/\t/g, ' ').replace(SPACE_RUN, ' ')
+        .replace(LEADING_SPACE, '').replace(TRAILING_SPACE, '');
+    }
+
+    if (opts.fullWidthPunct && !isHeading) line = toFullWidthPunct(line);
+
+    cleaned.push(line);
+  }
+
+  // ---- 合并被硬换行拆断的段落 ----
+  let merged = cleaned;
+  if (opts.mergeWrappedLines) {
+    const wrapWidth = estimateWrapWidth(cleaned);
+    merged = [];
+    for (let i = 0; i < cleaned.length; i += 1) {
+      if (onProgress && i % 6000 === 0) onProgress(0.75 + (i / (cleaned.length || 1)) * 0.2);
       const trimmed = cleaned[i].trim();
       if (!trimmed) {
         merged.push('');
@@ -2434,7 +3404,7 @@ async function openZip(buffer) {
   }
 }
 
-async function parseEpub(buffer) {
+async function parseEpub(buffer, options = {}) {
   const zip = await openZip(buffer);
   const container = await zip.text('META-INF/container.xml');
   const rootfileRe = tagRe('rootfile', '[^>]*>');
@@ -2522,7 +3492,10 @@ async function parseEpub(buffer) {
 
   const chapters = [];
   const mediaRegistry = new Map();
+  let docIndex = 0;
   for (const doc of docs) {
+    docIndex += 1;
+    if (options.onProgress) options.onProgress(docIndex, docs.length, 'epub');
     const rawHtml = await zip.text(doc.href);
     if (rawHtml == null) continue;
     // 图片 / 视频先换成占位标记，再转文本，否则会跟着标签一起被剥掉
@@ -3456,6 +4429,7 @@ function readMobi(buffer) {
 async function readAnyFile(file, options = {}) {
   const buffer = await file.arrayBuffer();
   const ext = extOf(file.name);
+  if (options.onStage) options.onStage('parse', ext, buffer.byteLength);
   const base = { buffer: null, native: null, confident: true, encoding: 'utf-8' };
 
   if (ext === 'pdf') {
@@ -3471,7 +4445,7 @@ async function readAnyFile(file, options = {}) {
     };
   }
   if (ext === 'epub') {
-    const book = await parseEpub(buffer);
+    const book = await parseEpub(buffer, { onProgress: options.onProgress });
     if (!book.chapters.length) throw new Error('这个 EPUB 里没有解析出正文，可能带 DRM 或文件损坏');
     return {
       ...base,
@@ -3669,6 +4643,156 @@ async function ocrPdf(buffer, options = {}) {
 }
 
 
+/* ===== src/text-analyze.js ===== */
+/**
+ * 清洗 + 分章的完整流程（纯函数）。
+ * 既能在 Web Worker 里跑（不卡界面），也能在主线程直接调用（Worker 不可用时兜底）。
+ */
+
+
+const EMPTY_STATS = () => ({
+  originalChars: 0, originalLines: 0, urlsRemoved: 0, adLines: 0, garbledLines: 0,
+  mojibakeFixed: 0, mergedLines: 0, blankLinesRemoved: 0, finalChars: 0, finalLines: 0,
+});
+
+/**
+ * @param {{raw: string, native?: Array, useNative?: boolean, cleanOpts: object, splitOpts: object, autoRules?: boolean}} payload
+ * @param {(fraction: number, label?: string) => void} [onProgress]
+ */
+function analyzeText(payload, onProgress) {
+  const report = (p, label) => { if (onProgress) onProgress(Math.max(0, Math.min(1, p)), label); };
+  const cleanOpts = payload.cleanOpts || {};
+  let splitOpts = { ...DEFAULT_SPLIT_OPTIONS, ...(payload.splitOpts || {}) };
+
+  // 新导入的书：先自动挑分章规则
+  if (payload.autoRules) {
+    report(0.02, '识别章节写法…');
+    const ids = suggestRuleIds(payload.raw || '', splitOpts.maxTitleLength);
+    splitOpts = { ...splitOpts, ruleIds: ids.length ? ids : DEFAULT_SPLIT_OPTIONS.ruleIds };
+  }
+
+  let text;
+  let stats;
+  let chapters;
+  let usedFallback = false;
+  let repair = { inserted: 0, filled: [], stillMissing: [] };
+
+  if (payload.useNative && payload.native && payload.native.length) {
+    // 电子书自带目录：逐章清洗，章节结构不变
+    stats = EMPTY_STATS();
+    chapters = [];
+    const total = payload.native.length;
+    payload.native.forEach((c, i) => {
+      if (i % 5 === 0) report(0.05 + (i / total) * 0.85, `清洗第 ${i + 1} / ${total} 章…`);
+      const res = cleanText(c.content, cleanOpts, splitOpts);
+      Object.keys(stats).forEach((k) => { stats[k] += res.stats[k] || 0; });
+      chapters.push({
+        title: c.title, level: 2, content: res.text, charCount: res.text.replace(/\s/g, '').length,
+      });
+    });
+    text = chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n');
+  } else {
+    const cleaned = cleanText(payload.raw || '', cleanOpts, splitOpts,
+      (p) => report(0.05 + p * 0.75, '清洗乱码、删除网址与广告…'));
+    text = cleaned.text;
+    stats = cleaned.stats;
+    report(0.82, '识别章节、补回漏掉的章…');
+    const split = splitChapters(text, splitOpts);
+    chapters = split.chapters;
+    usedFallback = split.usedFallback;
+    repair = split.repair || repair;
+  }
+
+  report(0.94, '统计分章规则…');
+  const ruleStats = analyzeRules(text, splitOpts.maxTitleLength || 40);
+  report(1, '完成');
+  return {
+    text, stats, chapters, usedFallback, repair, ruleStats, ruleIds: splitOpts.ruleIds,
+  };
+}
+
+
+/* ===== src/text-engine.js ===== */
+/**
+ * 主线程这边的"文本引擎"：优先把清洗 / 分章丢给 Web Worker，
+ * Worker 起不来（老浏览器、特殊环境）就自动在主线程里算，结果完全一样。
+ *
+ * - 模块版：new Worker('src/text-worker.js', { type: 'module' })
+ * - 单文件版：构建时把相关代码内联成 <script type="text/plain" id="text-worker-src">，
+ *   运行时转成 blob URL 起一个普通 Worker
+ */
+
+function createTextEngine() {
+  let worker = null;
+  let broken = false;
+  let seq = 0;
+  const jobs = new Map();
+
+  const failAll = (reason) => {
+    broken = true;
+    for (const job of jobs.values()) job.reject(Object.assign(new Error(reason), { workerBroken: true }));
+    jobs.clear();
+    if (worker) { try { worker.terminate(); } catch { /* 忽略 */ } }
+    worker = null;
+  };
+
+  function getWorker() {
+    if (broken || typeof Worker === 'undefined') return null;
+    if (worker) return worker;
+    try {
+      const inline = typeof document !== 'undefined' ? document.getElementById('text-worker-src') : null;
+      if (inline && inline.textContent.length > 100) {
+        const url = URL.createObjectURL(new Blob([inline.textContent], { type: 'text/javascript' }));
+        worker = new Worker(url);
+      } else {
+        worker = new Worker('src/text-worker.js', { type: 'module' });
+      }
+    } catch {
+      broken = true;
+      return null;
+    }
+    worker.onmessage = (event) => {
+      const msg = event.data || {};
+      const job = jobs.get(msg.id);
+      if (!job) return;
+      if (msg.type === 'progress') { if (job.onProgress) job.onProgress(msg.p, msg.label); return; }
+      jobs.delete(msg.id);
+      if (msg.type === 'done') job.resolve(msg.result);
+      else job.reject(new Error(msg.message || '分析失败'));
+    };
+    worker.onerror = (event) => {
+      if (event && event.preventDefault) event.preventDefault();
+      failAll('worker-error');
+    };
+    return worker;
+  }
+
+  return {
+    /** 当前是否在用后台线程 */
+    get usingWorker() { return !!worker && !broken; },
+
+    /**
+     * @param {object} payload 见 analyzeText
+     * @param {(fraction: number, label?: string) => void} [onProgress]
+     */
+    analyze(payload, onProgress) {
+      const w = getWorker();
+      if (!w) return Promise.resolve().then(() => analyzeText(payload, onProgress));
+      seq += 1;
+      const id = seq;
+      return new Promise((resolve, reject) => {
+        jobs.set(id, { resolve, reject, onProgress });
+        w.postMessage({ id, payload });
+      }).catch((err) => {
+        // Worker 挂了：换主线程再算一次，保证功能不受影响
+        if (err && err.workerBroken) return analyzeText(payload, onProgress);
+        throw err;
+      });
+    },
+  };
+}
+
+
 /* ===== src/tts.js ===== */
 /**
  * 朗读（听书）：用浏览器自带的语音合成逐句朗读，
@@ -3849,6 +4973,555 @@ function createSpeaker(options = {}) {
       cancel();
     },
   };
+}
+
+
+/* ===== src/loader.js ===== */
+/**
+ * 加载进度条：让用户"感觉到进度在走"。
+ *
+ * 几个手法：
+ * 1. 永不停滞：每个阶段开始时，用一段很长的 ease-out 过渡慢慢"蠕动"到本阶段上限附近，
+ *    前快后慢、但一直在动；真实进度到了就快速追上去。
+ * 2. 走合成器：进度用 transform 表示（右侧一块"遮罩"按 scaleX 收缩），
+ *    即使主线程在做清洗、分章这类重活被卡住，动画也照样流畅。
+ * 3. 反向条纹：填充区里的斜条纹往"反方向"移动，视觉上显得更快。
+ * 4. 收尾冲刺：完成时用很短的时间冲到 100%，给一个干脆的结束感。
+ * 5. 快的操作不闪：250ms 内做完的根本不显示。
+ */
+
+const EASE_CREEP = 'cubic-bezier(0.08, 0.72, 0.22, 1)';   // 起步快、尾巴长
+const EASE_CATCH = 'cubic-bezier(0.25, 0.8, 0.3, 1)';
+
+const nextPaint = () => new Promise((resolve) => {
+  requestAnimationFrame(() => requestAnimationFrame(resolve));
+});
+
+/** 某个阶段"蠕动"的上限：永远留一点余量，不会在真实完成前走满 */
+function creepCeiling(from, to) {
+  return from + (to - from) * 0.94;
+}
+
+/** 蠕动时长：预计耗时的 3 倍——预计准的话，到点时大约走到阶段的 85% */
+function creepDuration(expectedMs) {
+  return Math.max(900, Math.min(120000, (Number(expectedMs) || 1000) * 3));
+}
+
+/**
+ * 在一个容器里造一条进度条，返回控制器。
+ * @param {HTMLElement} host
+ */
+function createProgressBar(host) {
+  host.classList.add('nr-bar');
+  host.innerHTML = '<div class="nr-ribs"></div><div class="nr-cover"></div>';
+  const cover = host.querySelector('.nr-cover');
+  let target = 0;
+
+  const apply = (value, ms, ease) => {
+    target = Math.max(0, Math.min(1, value));
+    cover.style.transition = ms ? `transform ${ms}ms ${ease}` : 'none';
+    cover.style.transform = `scaleX(${1 - target})`;
+  };
+
+  return {
+    /** 当前"看得见的"进度（过渡进行中也能读到实时值） */
+    value() {
+      const m = getComputedStyle(cover).transform;
+      if (!m || m === 'none') return 0;
+      const a = Number(m.replace(/^matrix\(/, '').split(',')[0]);
+      return Number.isFinite(a) ? 1 - a : target;
+    },
+    get target() { return target; },
+    set(value, ms = 320) {
+      apply(value, ms, EASE_CATCH);
+    },
+    creep(ceiling, ms) {
+      apply(ceiling, ms, EASE_CREEP);
+    },
+    reset() {
+      apply(0, 0);
+    },
+  };
+}
+
+/* =========================================================
+ * 全局加载层：导入、打开大书、备份这类"可能要等一会"的操作都用它
+ * =======================================================*/
+
+const TIPS = [
+  '小提示：按 T 打开目录，按 G 直接跳到第几章',
+  '小提示：选中正文里的一段字，就能写笔记',
+  '小提示：按 P 开始朗读，一章读完会自动接下一章',
+  '小提示：书多了可以用「智能整理」按系列归类',
+  '小提示：扫描版 PDF 可以用 OCR 识别成文字',
+  '小提示：设置里能导出完整备份，换电脑也不丢进度',
+];
+
+function createLoader(els) {
+  const bar = createProgressBar(els.bar);
+  const state = {
+    active: false, visible: false, stage: null, startedAt: 0, showTimer: null, tipTimer: null, pctTimer: null,
+    catchTimer: null, onFinish: null,
+  };
+
+  const renderPct = () => {
+    if (!state.active) return;
+    const pct = Math.min(99, Math.floor(bar.value() * 100));
+    els.pct.textContent = `${pct}%`;
+    els.root.setAttribute('aria-valuenow', String(pct));
+  };
+
+  const show = () => {
+    if (!state.active || state.visible) return;
+    state.visible = true;
+    els.root.classList.remove('hidden', 'leaving');
+    state.pctTimer = setInterval(renderPct, 80);
+    let tipIndex = Math.floor(Math.random() * TIPS.length);
+    els.tip.textContent = TIPS[tipIndex];
+    state.tipTimer = setInterval(() => {
+      tipIndex = (tipIndex + 1) % TIPS.length;
+      els.tip.textContent = TIPS[tipIndex];
+    }, 3800);
+    // 等超过 2 秒才提示可以玩游戏，快的操作不打扰
+    setTimeout(() => { if (state.active) els.playBtn.classList.remove('hidden'); }, 2000);
+  };
+
+  const creepStage = () => {
+    const s = state.stage;
+    if (!s) return;
+    bar.creep(creepCeiling(s.from, s.to), creepDuration(s.expectedMs));
+  };
+
+  return {
+    get active() { return state.active; },
+    get visible() { return state.visible; },
+    value: () => bar.value(),
+
+    /** 开始一次加载；delayMs 内结束的话根本不显示 */
+    start(title, { delayMs = 250 } = {}) {
+      clearTimeout(state.showTimer);
+      state.active = true;
+      state.visible = false;
+      state.startedAt = performance.now();
+      state.stage = null;
+      els.title.textContent = title || '正在处理';
+      els.stage.textContent = '准备中…';
+      els.pct.textContent = '0%';
+      els.done.classList.add('hidden');
+      els.playBtn.classList.add('hidden');
+      bar.reset();
+      // 明知会很慢（大文件）就立即显示：后面紧跟的同步解码会卡住计时器，等它触发就晚了
+      if (delayMs <= 0) show();
+      else state.showTimer = setTimeout(show, delayMs);
+    },
+
+    /**
+     * 进入一个阶段：进度会从当前位置朝 `to` 慢慢蠕动，直到下一个阶段或真实进度更新。
+     * @param {string} label 阶段说明
+     * @param {number} to 这个阶段结束时的整体进度（0~1）
+     * @param {number} expectedMs 预计耗时，用来决定蠕动速度
+     * @param {{show?: boolean}} opts show=true 时立即显示（后面紧跟着会卡主线程的重活）
+     */
+    stage(label, to, expectedMs = 1000, opts = {}) {
+      if (!state.active) return;
+      const from = Math.max(bar.target, bar.value());
+      state.stage = { label, from, to: Math.max(from, to), expectedMs };
+      els.stage.textContent = label;
+      clearTimeout(state.catchTimer);
+      creepStage();
+      if (opts.show) show();
+    },
+
+    /** 当前阶段里的真实进度（0~1），比如 PDF 解析到第几页 */
+    progress(fraction, label) {
+      const s = state.stage;
+      if (!state.active || !s) return;
+      if (label) els.stage.textContent = label;
+      const real = s.from + (s.to - s.from) * Math.max(0, Math.min(1, fraction));
+      if (real > bar.value() + 0.004) {
+        bar.set(real, 260);
+        clearTimeout(state.catchTimer);
+        state.catchTimer = setTimeout(creepStage, 280);   // 追上之后接着蠕动，不停下
+      }
+    },
+
+    /** 完成：冲刺到 100%，然后淡出（如果用户正在玩游戏，就留着让他自己关） */
+    finish({ keepOpen, message = '完成！' } = {}) {
+      return new Promise((resolve) => {
+        clearTimeout(state.showTimer);
+        clearTimeout(state.catchTimer);
+        if (!state.visible) {
+          state.active = false;
+          resolve();
+          return;
+        }
+        els.playBtn.classList.add('hidden');     // 冲刺阶段不再提供"开一局"
+        bar.set(1, 380);
+        setTimeout(() => {
+          els.pct.textContent = '100%';
+          els.stage.textContent = message;
+          clearInterval(state.pctTimer);
+          clearInterval(state.tipTimer);
+          state.active = false;
+          // 在真正要关的这一刻再看：用户只要主动打开了小游戏（哪怕还没按第一下），
+          // 就留给他自己决定什么时候走，不要刚点开就被收掉
+          const playing = !!(els.game && els.game.__game);
+          const stay = keepOpen === undefined ? playing : keepOpen;
+          if (stay) {
+            els.stage.textContent = `${message} 玩完这局再走也行～`;
+            els.done.classList.remove('hidden');
+            state.onFinish = resolve;
+            return;
+          }
+          this.close();
+          resolve();
+        }, 420);
+      });
+    },
+
+    fail() {
+      clearTimeout(state.showTimer);
+      clearTimeout(state.catchTimer);
+      clearInterval(state.pctTimer);
+      clearInterval(state.tipTimer);
+      state.active = false;
+      this.close();
+    },
+
+    close() {
+      if (els.onClose) els.onClose();          // 比如收起小游戏，免得下次打开还挂着
+      if (state.visible) {
+        els.root.classList.add('leaving');
+        setTimeout(() => { els.root.classList.add('hidden'); els.root.classList.remove('leaving'); }, 220);
+      }
+      state.visible = false;
+      if (state.onFinish) { const fn = state.onFinish; state.onFinish = null; fn(); }
+    },
+  };
+}
+
+
+/* ===== src/wait-game.js ===== */
+/**
+ * 等待小游戏「墨点跳跳」：一本小书在进度条上奔跑，
+ * 空格 / ↑ / 点一下 跳过墨点，顺手接住飘着的「字」加分。
+ * 地面那条线就是当前的加载进度，玩着玩着书就加载好了。
+ */
+
+const BEST_KEY = 'novel-reader:gameBest';
+const GRAVITY = 2300;
+const JUMP_V = 580;   // 最高点约 73px：跳得过高墨点、够得着飘着的字，又不会跳出画面
+const GROUND_PAD = 26;
+const GLYPHS = ['书', '字', '文', '墨', '章', '卷', '诗', '读'];
+
+function readBest() {
+  try { return Number(localStorage.getItem(BEST_KEY)) || 0; } catch { return 0; }
+}
+function writeBest(v) {
+  try { localStorage.setItem(BEST_KEY, String(v)); } catch { /* 忽略 */ }
+}
+
+/** 两个矩形是否相交（各自往里收一点，手感更宽容） */
+function hit(a, b, shrink = 5) {
+  return a.x + shrink < b.x + b.w - shrink && a.x + a.w - shrink > b.x + shrink
+    && a.y + shrink < b.y + b.h - shrink && a.y + a.h - shrink > b.y + shrink;
+}
+
+/** 速度随时间变快，但有上限 */
+function speedAt(seconds) {
+  return Math.min(520, 230 + seconds * 9);
+}
+
+/**
+ * @param {HTMLElement} container
+ * @param {{progress?: () => number, palette?: () => object}} options
+ */
+function createInkRunner(container, options = {}) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'ink-runner';
+  canvas.setAttribute('aria-label', '墨点跳跳小游戏：按空格或点击跳跃');
+  canvas.tabIndex = 0;
+  container.innerHTML = '';
+  container.appendChild(canvas);
+
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  let W = 0;
+  const H = 150;
+  const resize = () => {
+    W = Math.max(260, Math.min(620, container.clientWidth || 520));
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = `${W}px`;
+    canvas.style.height = `${H}px`;
+  };
+  resize();
+  const ctx = canvas.getContext('2d');
+
+  const game = {
+    running: false,
+    over: false,
+    started: false,
+    time: 0,
+    score: 0,
+    best: readBest(),
+    runner: { x: 44, y: 0, w: 30, h: 36, vy: 0, onGround: true },
+    blots: [],
+    glyphs: [],
+    spawnIn: 1.1,
+    glyphIn: 1.8,
+    raf: 0,
+    last: 0,
+    jumps: 0,
+  };
+  const ground = () => H - GROUND_PAD;
+
+  const colors = () => {
+    const css = getComputedStyle(document.documentElement);
+    const pick = (name, fallback) => (css.getPropertyValue(name) || '').trim() || fallback;
+    return {
+      text: pick('--text', '#2b2a27'),
+      dim: pick('--text-dim', '#6f6a60'),
+      accent: pick('--accent', '#9a6a3a'),
+      soft: pick('--surface-2', '#f0ece2'),
+      surface: pick('--surface', '#fffdf8'),
+    };
+  };
+
+  function reset() {
+    game.over = false;
+    game.time = 0;
+    game.score = 0;
+    game.blots = [];
+    game.glyphs = [];
+    game.spawnIn = 1.1;
+    game.glyphIn = 1.8;
+    game.runner.y = ground() - game.runner.h;
+    game.runner.vy = 0;
+    game.runner.onGround = true;
+  }
+
+  function jump() {
+    if (game.over) { reset(); if (!game.running) start(); return; }
+    if (!game.running) start();
+    const r = game.runner;
+    if (r.onGround) {
+      r.vy = -JUMP_V;
+      r.onGround = false;
+      game.jumps += 1;
+    }
+  }
+
+  function spawnBlot() {
+    const size = 16 + Math.random() * 16;
+    const tall = Math.random() < 0.25;
+    game.blots.push({ x: W + 10, y: ground() - (tall ? size * 1.7 : size), w: size, h: tall ? size * 1.7 : size, tall });
+  }
+
+  function spawnGlyph() {
+    game.glyphs.push({
+      x: W + 10, y: ground() - 70 - Math.random() * 30, w: 22, h: 22,
+      ch: GLYPHS[Math.floor(Math.random() * GLYPHS.length)], bob: Math.random() * 6,
+    });
+  }
+
+  function update(dt) {
+    game.time += dt;
+    const speed = speedAt(game.time);
+    game.score += dt * speed / 12;
+
+    const r = game.runner;
+    r.vy += GRAVITY * dt;
+    r.y += r.vy * dt;
+    // 只在下落时判断落地：否则开局第一帧 dt=0 时，刚起跳就会被判成"已落地"，第一下按键就不跳
+    if (r.vy >= 0 && r.y >= ground() - r.h) {
+      r.y = ground() - r.h;
+      r.vy = 0;
+      r.onGround = true;
+    }
+
+    game.spawnIn -= dt;
+    if (game.spawnIn <= 0) {
+      spawnBlot();
+      game.spawnIn = Math.max(0.55, 1.35 - game.time * 0.02) + Math.random() * 0.7;
+    }
+    game.glyphIn -= dt;
+    if (game.glyphIn <= 0) {
+      spawnGlyph();
+      game.glyphIn = 1.4 + Math.random() * 1.6;
+    }
+
+    for (const b of game.blots) b.x -= speed * dt;
+    for (const g of game.glyphs) g.x -= speed * dt;
+    game.blots = game.blots.filter((b) => b.x + b.w > -10);
+    game.glyphs = game.glyphs.filter((g) => g.x + g.w > -10 && !g.taken);
+
+    for (const g of game.glyphs) {
+      if (hit(r, g, 2)) { g.taken = true; game.score += 25; }
+    }
+    for (const b of game.blots) {
+      if (hit(r, b)) {
+        game.over = true;
+        game.running = false;
+        const final = Math.floor(game.score);
+        if (final > game.best) { game.best = final; writeBest(final); }
+        break;
+      }
+    }
+  }
+
+  /* ---- 画面 ---- */
+  function drawRunner(c, t) {
+    const r = game.runner;
+    const legPhase = r.onGround ? Math.sin(t * 22) : 0.6;
+    ctx.save();
+    ctx.translate(r.x, r.y);
+    // 两条小腿
+    ctx.strokeStyle = c.text;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(10, r.h); ctx.lineTo(10 + legPhase * 5, r.h + 7);
+    ctx.moveTo(20, r.h); ctx.lineTo(20 - legPhase * 5, r.h + 7);
+    ctx.stroke();
+    // 书身：封面 + 书脊 + 书页
+    ctx.fillStyle = c.accent;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(0, 0, r.w, r.h, 4) : ctx.rect(0, 0, r.w, r.h);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,.22)';
+    ctx.fillRect(0, 0, 5, r.h);
+    ctx.fillStyle = c.surface;
+    ctx.fillRect(r.w - 4, 3, 3, r.h - 6);
+    // 眼睛（跳起来时眯眼）
+    ctx.fillStyle = '#fff';
+    const eyeY = 12;
+    if (r.onGround) {
+      ctx.beginPath(); ctx.arc(14, eyeY, 3.2, 0, Math.PI * 2); ctx.arc(23, eyeY, 3.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#222';
+      ctx.beginPath(); ctx.arc(15, eyeY + 0.5, 1.5, 0, Math.PI * 2); ctx.arc(24, eyeY + 0.5, 1.5, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(11, eyeY); ctx.lineTo(17, eyeY); ctx.moveTo(20, eyeY); ctx.lineTo(26, eyeY); ctx.stroke();
+    }
+    // 书名签
+    ctx.fillStyle = 'rgba(255,255,255,.8)';
+    ctx.fillRect(10, 20, 14, 3);
+    ctx.fillRect(10, 26, 10, 3);
+    ctx.restore();
+  }
+
+  function drawBlot(c, b) {
+    ctx.fillStyle = c.text;
+    const cx = b.x + b.w / 2;
+    ctx.beginPath();
+    if (b.tall) {
+      ctx.ellipse(cx, b.y + b.h * 0.55, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+    } else {
+      ctx.arc(cx, b.y + b.h / 2, b.w / 2, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    // 溅出来的小墨点
+    ctx.beginPath();
+    ctx.arc(b.x - 3, b.y + b.h - 3, 2.4, 0, Math.PI * 2);
+    ctx.arc(b.x + b.w + 3, b.y + b.h - 5, 2, 0, Math.PI * 2);
+    ctx.arc(cx + 4, b.y - 4, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function draw(t) {
+    const c = colors();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    // 地面 = 加载进度
+    const progress = options.progress ? Math.max(0, Math.min(1, options.progress())) : 0;
+    const gy = ground() + 8;
+    ctx.fillStyle = c.soft;
+    ctx.fillRect(0, gy, W, 6);
+    ctx.fillStyle = c.accent;
+    ctx.fillRect(0, gy, W * progress, 6);
+    ctx.fillStyle = c.dim;
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`加载 ${Math.floor(progress * 100)}%`, W - 6, gy + 20);
+
+    // 飘着的字
+    ctx.textAlign = 'center';
+    ctx.font = '600 18px "Noto Serif SC", serif';
+    for (const g of game.glyphs) {
+      ctx.fillStyle = c.accent;
+      ctx.fillText(g.ch, g.x + g.w / 2, g.y + 17 + Math.sin(t * 4 + g.bob) * 3);
+    }
+    for (const b of game.blots) drawBlot(c, b);
+    drawRunner(c, t);
+
+    // 分数
+    ctx.textAlign = 'left';
+    ctx.fillStyle = c.dim;
+    ctx.font = '12px sans-serif';
+    ctx.fillText(`得分 ${Math.floor(game.score)}　最高 ${game.best}`, 8, 16);
+
+    if (!game.started || game.over) {
+      ctx.fillStyle = 'rgba(0,0,0,.04)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = c.text;
+      ctx.font = '600 15px sans-serif';
+      ctx.fillText(game.over ? `被墨点溅到了！得分 ${Math.floor(game.score)}` : '墨点跳跳', W / 2, 52);
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = c.dim;
+      ctx.fillText('按 空格 / ↑ 或 点一下 跳跃，接住飘着的字加分', W / 2, 74);
+    }
+  }
+
+  function frame(now) {
+    const t = now / 1000;
+    const dt = Math.min(0.05, (now - (game.last || now)) / 1000);
+    game.last = now;
+    if (game.running && !document.hidden) update(dt);
+    draw(t);
+    game.raf = requestAnimationFrame(frame);
+  }
+
+  function start() {
+    game.started = true;
+    game.running = true;
+    game.last = 0;
+  }
+
+  const onKey = (e) => {
+    if (!container.isConnected || container.offsetParent === null) return;
+    if (e.code === 'Space' || e.key === ' ' || e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+      e.preventDefault();
+      jump();
+    }
+  };
+  const onPointer = (e) => { e.preventDefault(); canvas.focus({ preventScroll: true }); jump(); };
+
+  document.addEventListener('keydown', onKey);
+  canvas.addEventListener('pointerdown', onPointer);
+  window.addEventListener('resize', resize);
+  reset();
+  game.raf = requestAnimationFrame(frame);
+
+  const api = {
+    get score() { return Math.floor(game.score); },
+    get best() { return game.best; },
+    get running() { return game.running; },
+    get over() { return game.over; },
+    get jumps() { return game.jumps; },
+    get runnerY() { return game.runner.y; },
+    jump,
+    destroy() {
+      cancelAnimationFrame(game.raf);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', resize);
+      container.innerHTML = '';
+    },
+  };
+  container.__game = api;   // 方便测试读取状态
+  return api;
 }
 
 
@@ -4242,7 +5915,10 @@ function saveSettings(settings) {
 
 
 
-const APP_VERSION = '1.10.0';   // 显示在阅读设置里，方便确认用的是哪一版
+
+
+
+const APP_VERSION = '1.11.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -4419,6 +6095,43 @@ function importTips(fileName) {
   return ['可以试试换一种编码，或者把文件另存为 UTF-8 的 TXT 再导入'];
 }
 function hideModal(id) { $(id).classList.add('hidden'); }
+
+/* =========================================================
+ * 加载进度条 + 等待小游戏
+ * =======================================================*/
+let loading = null;       // 全局加载层（main 里初始化）
+let engine = null;        // 清洗 / 分章引擎（优先在 Web Worker 里跑）
+const bars = {};          // 批量导入、OCR 用的进度条
+
+function mountGame(boxId, progressFn) {
+  const box = $(boxId);
+  box.classList.remove('hidden');
+  if (!box.__game) createInkRunner(box, { progress: progressFn });
+  const canvas = box.querySelector('canvas');
+  if (canvas) canvas.focus({ preventScroll: true });
+  return box.__game;
+}
+
+function unmountGame(boxId) {
+  const box = $(boxId);
+  if (box.__game) box.__game.destroy();
+  box.__game = null;
+  box.classList.add('hidden');
+}
+
+/** 按文件类型和大小估一下解析要多久，用来决定进度条蠕动的速度 */
+function estimateParseMs(ext, bytes) {
+  if (ext === 'pdf') return Math.max(600, bytes / 1500);
+  if (ext === 'epub') return Math.max(400, bytes / 6000);
+  if (['mobi', 'azw', 'azw3', 'prc', 'docx'].includes(ext)) return Math.max(400, bytes / 20000);
+  return Math.max(200, bytes / 60000);
+}
+
+const PARSE_LABELS = {
+  pdf: '解析 PDF，提取文字和插图…',
+  epub: '解压 EPUB，读取章节与插图…',
+  txt: '识别文字编码…',
+};
 
 /* =========================================================
  * 书架：分类侧栏 / 封面墙 / 搜索排序 / 批量管理 / 智能整理
@@ -4976,9 +6689,8 @@ function buildRuleList(activeIds) {
   }
 }
 
-function updateRuleCounts(text) {
-  const stats = analyzeRules(text, Number($('opt-maxTitle').value) || 40);
-  for (const s of stats) {
+function updateRuleCounts(stats) {
+  for (const s of stats || []) {
     const label = $('rule-list').querySelector(`[data-rule-id="${s.id}"] .count`);
     if (label) label.textContent = s.count ? `命中 ${s.count}` : '未命中';
   }
@@ -4989,51 +6701,49 @@ let previewTimer = null;
 function schedulePreview() {
   clearTimeout(previewTimer);
   $('import-status').textContent = '正在分析…';
-  previewTimer = setTimeout(runPreview, 180);
+  previewTimer = setTimeout(() => runPreview(), 180);
 }
 
-function runPreview() {
+let previewSeq = 0;
+
+/**
+ * 清洗 + 分章并刷新预览。重活在后台线程里做，界面不会卡。
+ * @param {{autoRules?: boolean, onProgress?: Function}} opts
+ *   autoRules=true：新导入的书，顺便自动挑分章规则
+ */
+async function runPreview(opts = {}) {
   const pending = state.pending;
   if (!pending) return;
+  const seq = ++previewSeq;
   const cleanOpts = collectCleanOptions();
   const splitOpts = collectSplitOptions();
-  const useNative = pending.native && $('opt-source').value === 'native';
+  const useNative = !!(pending.native && $('opt-source').value === 'native');
+  $('import-status').textContent = '正在分析…';
 
-  let text;
-  let stats;
-  let chapters;
-  let usedFallback = false;
-  let repair = { inserted: 0, filled: [], stillMissing: [] };
-
-  if (useNative) {
-    // 电子书自带目录：逐章清洗，章节结构保持不变
-    const cleanedChapters = pending.native.map((c) => {
-      const res = cleanText(c.content, cleanOpts, splitOpts);
-      return { title: cleanBookTitle(c.title) === c.title ? c.title : c.title, content: res.text, stats: res.stats };
-    });
-    chapters = cleanedChapters.map((c) => ({
-      title: c.title,
-      level: 2,
-      content: c.content,
-      charCount: c.content.replace(/\s/g, '').length,
-    }));
-    stats = cleanedChapters.reduce((acc, c) => {
-      Object.keys(acc).forEach((k) => { acc[k] += c.stats[k] || 0; });
-      return acc;
-    }, {
-      originalChars: 0, originalLines: 0, urlsRemoved: 0, adLines: 0, garbledLines: 0,
-      mojibakeFixed: 0, mergedLines: 0, blankLinesRemoved: 0, finalChars: 0, finalLines: 0,
-    });
-    text = chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n');
-  } else {
-    const cleaned = cleanText(pending.raw, cleanOpts, splitOpts);
-    text = cleaned.text;
-    stats = cleaned.stats;
-    const split = splitChapters(text, splitOpts);
-    chapters = split.chapters;
-    usedFallback = split.usedFallback;
-    repair = split.repair || repair;
+  let result;
+  try {
+    result = await engine.analyze({
+      raw: pending.raw,
+      native: useNative ? pending.native : null,
+      useNative,
+      cleanOpts,
+      splitOpts,
+      autoRules: !!opts.autoRules,
+    }, opts.onProgress);
+  } catch (err) {
+    if (seq === previewSeq) $('import-status').textContent = `分析失败：${err.message}`;
+    return;
   }
+  // 用户在分析期间又改了选项 / 关掉了窗口：丢弃过时的结果
+  if (seq !== previewSeq || state.pending !== pending) return;
+
+  if (opts.autoRules) {
+    buildRuleList(result.ruleIds);
+    splitOpts.ruleIds = result.ruleIds;
+  }
+  const {
+    text, stats, chapters, usedFallback, repair,
+  } = result;
 
   pending.clean = text;
   pending.chapters = chapters;
@@ -5081,10 +6791,10 @@ function runPreview() {
     repairBox.textContent = splitOpts.repairMissing ? '章节号连续，没有发现漏掉的章。' : '';
   }
 
-  updateRuleCounts(text);
+  updateRuleCounts(result.ruleStats);
 }
 
-function openImportModal(raw, name, encodingInfo, existing, native) {
+function openImportModal(raw, name, encodingInfo, existing, native) {  // eslint-disable-line consistent-return
   state.pending = {
     raw,
     name,
@@ -5132,16 +6842,20 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
       : '粘贴导入的文本无需选择编码')
     : `${kindLabel} 文件已解析为文本${viaNote}，无需选择编码`;
 
-  const suggested = existing && existing.splitOptions && existing.splitOptions.ruleIds.length
+  const known = existing && existing.splitOptions && existing.splitOptions.ruleIds.length
     ? existing.splitOptions.ruleIds
-    : (suggestRuleIds(raw) .length ? suggestRuleIds(raw) : DEFAULT_SPLIT_OPTIONS.ruleIds);
+    : null;
   fillOptionsUI(
     existing ? existing.cleanOptions : CLEAN_DEFAULTS,
-    { ...DEFAULT_SPLIT_OPTIONS, ...(existing ? existing.splitOptions : {}), ruleIds: suggested },
+    { ...DEFAULT_SPLIT_OPTIONS, ...(existing ? existing.splitOptions : {}), ruleIds: known || DEFAULT_SPLIT_OPTIONS.ruleIds },
   );
   showModal('import-modal');
-  runPreview();
+  // 返回 Promise，调用方可以等分析完成（并拿到进度）
+  return runPreview({ autoRules: !known, onProgress: previewHooks.onProgress });
 }
+
+/** 导入流程给预览挂的进度回调（单本导入时接到加载层上） */
+const previewHooks = { onProgress: null };
 
 function bindImportInputs() {
   const ids = ['opt-removeUrls', 'opt-removeAds', 'opt-removeSeparators', 'opt-fixMojibake',
@@ -5163,7 +6877,7 @@ function bindImportInputs() {
     runPreview();
   });
 
-  $('btn-auto-detect').addEventListener('click', () => {
+  $('btn-auto-detect').addEventListener('click', async () => {
     const pending = state.pending;
     if (!pending) return;
     const ids2 = suggestRuleIds(pending.raw, Number($('opt-maxTitle').value) || 40);
@@ -5172,7 +6886,7 @@ function bindImportInputs() {
       return;
     }
     buildRuleList(ids2);
-    runPreview();
+    await runPreview();
     toast(`已选用：${ids2.join(' + ')}`);
   });
 
@@ -5184,8 +6898,10 @@ function bindImportInputs() {
 async function confirmImport() {
   const pending = state.pending;
   if (!pending) return;
-  if (!pending.chapters || !pending.chapters.length) runPreview();
+  if (!pending.chapters || !pending.chapters.length) await runPreview();
   const title = ($('import-name').value || '未命名小说').trim();
+  loading.start(`正在把《${title}》放上书架`);
+  loading.stage('写入书架…', 0.7, Math.max(200, (pending.clean || '').length / 8000 + (pending.media || []).length * 40));
   const chapters = pending.chapters;
   const id = pending.bookId || newId();
   const existing = state.books.find((b) => b.id === id);
@@ -5217,6 +6933,7 @@ async function confirmImport() {
       nativeChapters: pending.native || null,
     });
   } catch (err) {
+    loading.fail();
     toast(`保存失败：${err && err.message ? err.message : err}`);
     return;
   }
@@ -5232,8 +6949,10 @@ async function confirmImport() {
 
   hideModal('import-modal');
   state.pending = null;
+  loading.stage('打开书…', 0.95, 300);
   await refreshShelf();
-  await openBook(id);
+  await openBook(id, { loader: false });
+  await loading.finish();
   toast(`《${title}》已导入，共 ${chapters.length} 章`);
 }
 
@@ -5280,8 +6999,8 @@ function askPdfPassword() {
   return prompt('这个 PDF 有密码保护，请输入打开密码：');
 }
 
-async function readBookFile(file) {
-  const info = await readAnyFile(file, { onPassword: askPdfPassword });
+async function readBookFile(file, hooks = {}) {
+  const info = await readAnyFile(file, { onPassword: askPdfPassword, ...hooks });
   return { ...info, buffer: info.buffer || null };
 }
 
@@ -5316,23 +7035,41 @@ async function handleFiles(files, opts = {}) {
   }
   if (skipped > 0) toast(`「${group.label}」栏只导入了 ${list.length} 个文件，忽略了 ${skipped} 个其它类型`);
   if (list.length === 1 && !opts.batch) {
+    const file = list[0];
+    const ext = extOf(file.name);
+    loading.start(`正在打开《${cleanBookTitle(file.name)}》`, { delayMs: file.size > 1e6 ? 0 : 250 });
+    loading.stage('读取文件…', 0.08, Math.max(150, file.size / 150000));
+    await nextPaint();   // 先把加载层画出来，再开始读文件
     try {
-      const info = await readBookFile(list[0]);
+      const info = await readBookFile(file, {
+        onStage: (step, fileExt, bytes) => {
+          loading.stage(PARSE_LABELS[fileExt] || '解析文件…', 0.64, estimateParseMs(fileExt, bytes));
+        },
+        onProgress: (i, n, kind) => {
+          loading.progress(i / n, kind === 'epub' ? `解析第 ${i} / ${n} 个章节文件…` : `解析第 ${i} / ${n} 页…`);
+        },
+      });
       if (!info.raw || !info.raw.replace(/\s/g, '')) {
-        const ocrAction = extOf(list[0].name) === 'pdf'
-          ? { label: '用 OCR 识别文字', run: () => openOcrModal(list[0]) }
-          : null;
-        showError(list[0].name, '这个文件里没有解析出可读的文字。', importTips(list[0].name), ocrAction);
+        loading.fail();
+        const ocrAction = ext === 'pdf' ? { label: '用 OCR 识别文字', run: () => openOcrModal(file) } : null;
+        showError(file.name, '这个文件里没有解析出可读的文字。', importTips(file.name), ocrAction);
         return;
       }
-      info.category = categoryFromPath(list[0]);
-      info.file = list[0];
-      openImportModal(info.raw, info.name, info, null, info.native);
+      info.category = categoryFromPath(file);
+      info.file = file;
+      // 清洗、分章在后台线程里跑，这里接它报上来的真实进度
+      loading.stage('清洗排版、识别章节…', 0.97, Math.max(300, info.raw.length / 1500));
+      await nextPaint();
+      previewHooks.onProgress = (p, label) => loading.progress(p, label);
+      try {
+        await openImportModal(info.raw, info.name, info, null, info.native);
+      } finally {
+        previewHooks.onProgress = null;
+      }
+      await loading.finish({ message: '准备好了' });
     } catch (err) {
-      const file = list[0];
-      const ocrAction = extOf(file.name) === 'pdf'
-        ? { label: '用 OCR 识别文字', run: () => openOcrModal(file) }
-        : null;
+      loading.fail();
+      const ocrAction = ext === 'pdf' ? { label: '用 OCR 识别文字', run: () => openOcrModal(file) } : null;
       showError(file.name, `读取失败：${err.message}`, importTips(file.name), ocrAction);
     }
     return;
@@ -5347,6 +7084,8 @@ async function batchImport(files) {
   $('batch-title').textContent = `批量导入 ${files.length} 个文件`;
   $('batch-done').classList.add('hidden');
   $('batch-cancel').classList.remove('hidden');
+  bars.batch.reset();
+  $('batch-play').classList.toggle('hidden', files.length < 3);
   const listEl = $('batch-list');
   listEl.innerHTML = '';
   const existing = await listBooks();
@@ -5358,21 +7097,29 @@ async function batchImport(files) {
     if (state.batchAbort) break;
     const file = files[i];
     $('batch-status').textContent = `(${i + 1}/${files.length}) 正在处理：${file.name}`;
-    $('batch-bar').style.width = `${((i / files.length) * 100).toFixed(1)}%`;
+    bars.batch.set(i / files.length, 300);
+    // 这一本还没处理完之前，朝下一格慢慢蠕动
+    bars.batch.creep((i + 0.92) / files.length, Math.max(900, estimateParseMs(extOf(file.name), file.size) * 3));
     try {
       /* eslint-disable no-await-in-loop */
       const info = await readBookFile(file);
       if (!info.raw || !info.raw.replace(/\s/g, '')) throw new Error('没有可读的文字');
 
-      const ruleIds = suggestRuleIds(info.raw);
-      const splitOpts = {
-        ...DEFAULT_SPLIT_OPTIONS,
-        ruleIds: ruleIds.length ? ruleIds : DEFAULT_SPLIT_OPTIONS.ruleIds,
-      };
-      const cleaned = cleanText(info.raw, CLEAN_DEFAULTS, splitOpts);
       const useNative = !!(info.native && info.native.length > 1);
-      const split = useNative ? null : splitChapters(cleaned.text, splitOpts);
-      const chapters = useNative ? nativeToChapters(info.native, CLEAN_DEFAULTS, splitOpts) : split.chapters;
+      const analysis = await engine.analyze({
+        raw: info.raw,
+        native: useNative ? info.native : null,
+        useNative,
+        cleanOpts: CLEAN_DEFAULTS,
+        splitOpts: DEFAULT_SPLIT_OPTIONS,
+        autoRules: true,
+      }, (p) => {
+        bars.batch.set((i + 0.1 + p * 0.85) / files.length, 200);
+      });
+      const splitOpts = { ...DEFAULT_SPLIT_OPTIONS, ruleIds: analysis.ruleIds };
+      const chapters = analysis.chapters;
+      const split = { repair: analysis.repair };
+      const cleaned = { text: analysis.text };
       const charCount = cleaned.text.replace(/\s/g, '').length;
 
       const dup = existing.find((b) => b.title === info.name && Math.abs((b.charCount || 0) - charCount) < 50);
@@ -5425,7 +7172,9 @@ async function batchImport(files) {
     /* eslint-enable no-await-in-loop */
   }
 
-  $('batch-bar').style.width = '100%';
+  bars.batch.set(1, 380);
+  const batchGame = $('batch-game').__game;
+  if (!batchGame || !(batchGame.running || batchGame.score > 0)) unmountGame('batch-game');
   $('batch-status').textContent = `完成：成功 ${ok} 本，跳过 ${skipped} 本，失败 ${failed} 本`;
   $('batch-cancel').classList.add('hidden');
   $('batch-done').classList.remove('hidden');
@@ -5468,11 +7217,17 @@ async function filesFromDataTransfer(dt) {
 /* =========================================================
  * 阅读（支持「一章一页」与「上下无缝滚动」两种模式）
  * =======================================================*/
-async function openBook(id) {
+async function openBook(id, opts = {}) {
+  const useLoader = opts.loader !== false;
   const meta = state.books.find((b) => b.id === id) || (await listBooks()).find((b) => b.id === id);
   if (!meta) { toast('书籍不存在'); return; }
+  if (useLoader) {
+    loading.start(`正在打开《${meta.title}》`);
+    loading.stage('读取正文…', 0.75, Math.max(150, (meta.charCount || 0) / 25000));
+  }
   const content = await getContent(id);
-  if (!content) { toast('正文数据丢失，请重新导入'); return; }
+  if (!content) { if (useLoader) loading.fail(); toast('正文数据丢失，请重新导入'); return; }
+  if (useLoader) loading.stage('排版…', 0.95, 250);
 
   releaseMediaUrls();
   state.mediaIndex = new Map();
@@ -5501,6 +7256,7 @@ async function openBook(id) {
   renderToc();
   const resumeRatio = meta.progress ? meta.progress.ratio : 0;
   renderReader(state.chapterIndex, resumeRatio);
+  if (useLoader) loading.finish();
   if (meta.lastReadAt && (state.chapterIndex > 0 || resumeRatio > 0.02)) {
     showResumeHint(state.chapterIndex, resumeRatio);
   } else {
@@ -6276,7 +8032,7 @@ function bindEvents() {
     e.target.value = '';
   });
   $('batch-cancel').addEventListener('click', () => { state.batchAbort = true; });
-  $('batch-done').addEventListener('click', () => hideModal('batch-modal'));
+  $('batch-done').addEventListener('click', () => { unmountGame('batch-game'); hideModal('batch-modal'); });
 
   $('btn-paste').addEventListener('click', () => showModal('paste-modal'));
   $('paste-cancel').addEventListener('click', () => hideModal('paste-modal'));
@@ -6344,8 +8100,8 @@ function bindEvents() {
     $('ocr-status').textContent = '正在停止……（当前这页识别完就停）';
   });
   $('ocr-use').addEventListener('click', useOcrResult);
-  $('ocr-cancel').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; hideModal('ocr-modal'); });
-  $('ocr-close').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; hideModal('ocr-modal'); });
+  $('ocr-cancel').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; unmountGame('ocr-game'); hideModal('ocr-modal'); });
+  $('ocr-close').addEventListener('click', () => { if (state.ocr) state.ocr.stop = true; unmountGame('ocr-game'); hideModal('ocr-modal'); });
   $('btn-ocr-again').addEventListener('click', () => {
     if (state.pending && state.pending.file) {
       hideModal('import-modal');
@@ -6652,7 +8408,9 @@ function openOcrModal(file) {
   state.ocr = { file, running: false, stop: false, result: null };
   $('ocr-file').textContent = `文件：${file.name}`;
   $('ocr-range').value = '';
-  $('ocr-bar').style.width = '0';
+  bars.ocr.reset();
+  unmountGame('ocr-game');
+  $('ocr-play').classList.add('hidden');
   $('ocr-status').textContent = '识别在你自己电脑上跑，不会上传文件；每页大概几秒钟，页数多可以先只识别前几页试试。';
   $('ocr-preview').classList.add('hidden');
   $('ocr-preview').textContent = '';
@@ -6667,6 +8425,7 @@ async function runOcr() {
   if (!task || task.running) return;
   task.running = true;
   task.stop = false;
+  $('ocr-play').classList.remove('hidden');
   $('ocr-start').classList.add('hidden');
   $('ocr-stop').classList.remove('hidden');
   $('ocr-use').classList.add('hidden');
@@ -6677,9 +8436,12 @@ async function runOcr() {
       scale: Number($('ocr-scale').value),
       range: $('ocr-range').value,
       shouldStop: () => task.stop,
-      onProgress: ({ done, total, message }) => {
-        const percent = total ? (done / total) * 100 : 0;
-        $('ocr-bar').style.width = `${percent.toFixed(1)}%`;
+      onProgress: ({ done, total, message, stage }) => {
+        if (total) {
+          bars.ocr.set(done / total, 300);
+          // 每页大约几秒，下一页识别完之前朝它慢慢蠕动
+          if (done < total) bars.ocr.creep((done + 0.9) / total, stage === 'init' ? 12000 : 9000);
+        }
         $('ocr-status').textContent = total
           ? `${message || ''}（${done} / ${total} 页）`
           : (message || '');
@@ -6702,6 +8464,10 @@ async function runOcr() {
     }
   } finally {
     task.running = false;
+    bars.ocr.set(task.result ? 1 : bars.ocr.value(), 300);
+    $('ocr-play').classList.add('hidden');
+    const ocrGame = $('ocr-game').__game;
+    if (!ocrGame || !(ocrGame.running || ocrGame.score > 0)) unmountGame('ocr-game');
     $('ocr-stop').classList.add('hidden');
     $('ocr-start').classList.remove('hidden');
     $('ocr-start').textContent = '重新识别';
@@ -6711,6 +8477,7 @@ async function runOcr() {
 function useOcrResult() {
   const task = state.ocr;
   if (!task || !task.result) return;
+  unmountGame('ocr-game');
   hideModal('ocr-modal');
   const name = cleanBookTitle(task.file.name);
   openImportModal(task.result.text, name, {
@@ -6737,24 +8504,38 @@ function downloadBlob(blob, filename) {
 }
 
 async function doExportBackup(includeText) {
-  toast(includeText ? '正在打包备份，书多的话要等一会…' : '正在导出进度与笔记…');
+  loading.start(includeText ? '正在打包完整备份' : '正在导出进度与笔记');
+  loading.stage('整理书架数据…', 0.85, Math.max(300, state.books.length * (includeText ? 120 : 10)));
   try {
-    const data = await exportBackup({ includeText });
+    const data = await exportBackup({
+      includeText,
+      onProgress: (i, n) => loading.progress(i / n, `已打包 ${i} / ${n} 本`),
+    });
+    loading.stage('生成文件…', 0.98, 300);
+    await nextPaint();
     const stamp = new Date().toISOString().slice(0, 10);
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     downloadBlob(blob, `清风阅读备份-${includeText ? '完整' : '进度笔记'}-${stamp}.json`);
     const size = (blob.size / 1024 / 1024).toFixed(2);
+    await loading.finish();
     toast(`已导出 ${data.books.length} 本书的备份（${size} MB）`);
   } catch (err) {
+    loading.fail();
     showError('', `导出失败：${err.message}`, ['书特别多时可以试试"只导进度笔记"']);
   }
 }
 
 async function doImportBackup(file) {
+  loading.start('正在恢复备份');
+  loading.stage('读取备份文件…', 0.3, Math.max(200, file.size / 200000));
   try {
     const text = await file.text();
+    loading.stage('解析备份…', 0.45, Math.max(200, file.size / 400000), { show: file.size > 2e6 });
+    await nextPaint();
     const data = JSON.parse(text);
+    loading.stage('写回书架…', 0.95, Math.max(300, (data.books || []).length * 150));
     const result = await importBackup(data);
+    await loading.finish();
     await refreshShelf();
     if (state.book) {
       state.marks = await getMarks(state.book.id).catch(() => state.marks);
@@ -6767,6 +8548,7 @@ async function doImportBackup(file) {
     if (result.skipped) parts.push(`跳过 ${result.skipped} 本（备份里没有正文且书架上没有）`);
     toast(parts.length ? parts.join('，') : '备份里没有可恢复的内容');
   } catch (err) {
+    loading.fail();
     showError(file.name, `恢复失败：${err.message}`, ['请选择由本应用导出的 .json 备份文件']);
   }
 }
@@ -6795,6 +8577,28 @@ function setupPwa() {
 }
 
 async function main() {
+  loading = createLoader({
+    root: $('loader'), bar: $('loader-bar'), pct: $('loader-pct'), title: $('loader-title'),
+    stage: $('loader-stage'), tip: $('loader-tip'), playBtn: $('loader-play'), done: $('loader-done'),
+    game: $('loader-game'),
+    onClose: () => unmountGame('loader-game'),
+  });
+  engine = createTextEngine();
+  bars.batch = createProgressBar($('batch-bar'));
+  bars.ocr = createProgressBar($('ocr-bar'));
+  $('loader-play').addEventListener('click', () => {
+    $('loader-play').classList.add('hidden');
+    mountGame('loader-game', () => loading.value());
+  });
+  $('loader-done').addEventListener('click', () => loading.close());
+  $('batch-play').addEventListener('click', () => {
+    $('batch-play').classList.add('hidden');
+    mountGame('batch-game', () => bars.batch.value());
+  });
+  $('ocr-play').addEventListener('click', () => {
+    $('ocr-play').classList.add('hidden');
+    mountGame('ocr-game', () => bars.ocr.value());
+  });
   applySettings();
   bindSettings();
   bindImportInputs();
