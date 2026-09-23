@@ -1,0 +1,13 @@
+{
+  "name": "qingfeng-novel-reader",
+  "version": "1.0.0",
+  "description": "纯本地的 TXT 小说阅读器：自动清理乱码与推广网址、智能排版、多规则分章、任意跳章。",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes http-server -p 8080 -c-1 .",
+    "test": "node tests/run-tests.mjs",
+    "build": "node tools/build-standalone.mjs"
+  },
+  "license": "MIT"
+}

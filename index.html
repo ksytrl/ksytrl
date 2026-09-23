@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="sepia">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>清风阅读 · 本地小说阅读器</title>
+<meta name="description" content="纯本地的小说阅读器：支持 TXT / EPUB / PDF，自动清理乱码与推广网址、智能排版、多规则分章与补章、无缝滚动阅读、任意跳章。">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#9a6a3a">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <button class="icon-btn" id="btn-toc" title="目录 (T)" aria-label="目录">☰</button>
+    <div class="topbar-title">
+      <strong id="top-book">清风阅读</strong>
+      <span id="top-chapter">本地小说阅读器 · PDF / EPUB / TXT / MOBI …</span>
+    </div>
+    <div class="topbar-actions">
+      <button class="ghost-btn" id="btn-shelf" title="书架">书架</button>
+      <button class="ghost-btn" id="btn-retypeset" title="重新排版 / 重新分章" hidden>重新排版</button>
+      <button class="ghost-btn" id="btn-tts" title="朗读 (P)" hidden>朗读</button>
+      <button class="ghost-btn" id="btn-marks" title="书签与笔记 (B)" hidden>书签</button>
+      <button class="ghost-btn" id="btn-export" title="导出清洗后的 TXT" hidden>导出</button>
+      <button class="ghost-btn" id="btn-install" title="安装到桌面 / 主屏幕" hidden>安装</button>
+      <button class="icon-btn" id="btn-settings" title="阅读设置 (S)" aria-label="阅读设置">Aa</button>
+    </div>
+  </header>
+
+  <main class="main" id="main">
+    <!-- ============ 书架 ============ -->
+    <section class="view" id="view-shelf">
+      <div class="hero">
+        <h1>清风阅读</h1>
+        <p class="hero-sub">
+          PDF / EPUB / TXT 分栏导入（另有 MOBI、AZW3、DOCX、HTML、Markdown、FB2、RTF），自动识别编码、清除乱码与推广网址、智能排版；
+          支持多种章节格式、补回漏掉的章、上下无缝滚动阅读并可随意跳章。所有数据仅保存在你的浏览器本地。
+        </p>
+        <div class="format-tabs" id="format-tabs"></div>
+        <div class="dropzone" id="dropzone">
+          <input type="file" id="file-input" multiple hidden>
+          <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
+          <input type="file" id="cover-input" accept="image/*" hidden>
+          <div class="dropzone-inner">
+            <div class="dropzone-icon" id="dz-icon">📖</div>
+            <div class="dropzone-actions">
+              <button class="primary-btn" id="btn-choose">选择文件</button>
+              <button class="ghost-btn" id="btn-choose-folder">导入整个文件夹</button>
+              <button class="ghost-btn" id="btn-paste">粘贴文本导入</button>
+            </div>
+            <p class="hint" id="dz-hint"></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="shelf-head">
+        <h2>我的书架</h2>
+        <span class="muted" id="shelf-count"></span>
+        <div class="grow"></div>
+        <button class="ghost-btn" id="btn-tidy">智能整理</button>
+        <button class="ghost-btn" id="btn-select-mode">批量管理</button>
+        <div class="view-toggle" id="view-toggle">
+          <button data-view="grid" title="封面墙">▦</button>
+          <button data-view="list" title="列表">☰</button>
+        </div>
+      </div>
+      <div class="shelf-layout">
+        <aside class="shelf-side" id="shelf-side"></aside>
+        <div class="shelf-main">
+          <div class="shelf-tools">
+            <input type="search" id="shelf-search" placeholder="搜索书名 / 分类">
+            <select id="shelf-sort">
+              <option value="recent">最近阅读</option>
+              <option value="created">最近导入</option>
+              <option value="title">按书名</option>
+              <option value="progress">按阅读进度</option>
+            </select>
+          </div>
+          <div class="category-bar" id="category-bar"></div>
+          <div class="book-grid" id="book-grid"></div>
+          <div class="pager hidden" id="pager"></div>
+        </div>
+      </div>
+      <p class="empty-tip" id="shelf-empty">书架还是空的，先导入一本书吧（TXT / EPUB / PDF，或一整个文件夹）。</p>
+
+      <section class="features">
+        <div><h3>🧹 清洗乱码与广告</h3><p>识别整行乱码、锟斤拷类错码、站点水印与推广语，并还原被误解码的文字。</p></div>
+        <div><h3>🔗 去除网址</h3><p>覆盖 http 链接、www 域名、全角域名以及 "xxx点com"、"w w w . x x . c o m" 等混淆写法。</p></div>
+        <div><h3>📐 自动排版</h3><p>合并硬换行断句、压缩空行、统一段首缩进，可选半角标点转全角。</p></div>
+        <div><h3>🔖 多格式分章</h3><p>第N章/节/回/话、第N卷、楔子番外、Chapter N、编号标题、符号标题，支持自定义正则。</p></div>
+        <div><h3>🩹 补回漏掉的章</h3><p>按章节号连号校验，把换了写法、被并进上一章的章节自动切出来，并报告确实缺失的章号。</p></div>
+        <div><h3>📚 多格式导入</h3><p>PDF / EPUB / TXT 分栏导入，各栏只认自己的类型；MOBI、AZW3、DOCX、HTML、Markdown、FB2、RTF 也能读。</p></div>
+        <div><h3>⚡ 任意跳章</h3><p>目录点击、章节号直达、上一章/下一章、全文搜索定位，快捷键左右方向键翻章。</p></div>
+        <div><h3>🌊 无缝滚动</h3><p>上下滚动自动接上下一章 / 上一章，也可切换成一章一页；进度与位置自动记忆。</p></div>
+        <div><h3>🔊 朗读听书</h3><p>用系统语音逐句朗读，读到哪句高亮哪句，一章读完自动接下一章，可调语速与音色。</p></div>
+        <div><h3>🔖 书签与笔记</h3><p>任意位置加书签，选中正文写笔记并自动高亮，可按章节浏览、跳转与导出。</p></div>
+        <div><h3>🖼️ 书架封面</h3><p>EPUB 取内封、PDF 取首页，其余按书名生成配色封面，也可以自己换图。</p></div>
+        <div><h3>🗂️ 书架分组</h3><p>按分类分组与搜索；导入文件夹时自动按子目录名建立分类。</p></div>
+        <div><h3>📲 可安装 (PWA)</h3><p>可装到桌面或手机主屏，断网也能打开继续读。</p></div>
+        <div><h3>🌙 阅读体验</h3><p>四套主题、字号行距页宽字体自定义、自动滚动、导出排版后的干净 TXT。</p></div>
+      </section>
+    </section>
+
+    <!-- ============ 阅读区 ============ -->
+    <section class="view hidden" id="view-reader">
+      <article class="chapter" id="chapter">
+        <h2 class="chapter-title" id="chapter-title"></h2>
+        <div class="chapter-body" id="chapter-body"></div>
+      </article>
+      <div class="resume-banner hidden" id="resume-banner">
+        <span id="resume-text"></span>
+        <button class="ghost-btn" id="resume-restart">回到本章开头</button>
+        <button class="icon-btn" id="resume-close" aria-label="关闭">✕</button>
+      </div>
+      <div class="chapter-flow hidden" id="chapter-flow"></div>
+      <div class="flow-tip hidden" id="flow-tip">已到全书结尾</div>
+      <nav class="chapter-nav">
+        <button class="ghost-btn" id="btn-prev">← 上一章</button>
+        <div class="jump-inline">
+          <label for="jump-input">跳转到第</label>
+          <input type="number" id="jump-input" min="1" step="1" inputmode="numeric">
+          <label for="jump-input">章</label>
+          <button class="ghost-btn" id="btn-jump">GO</button>
+        </div>
+        <button class="ghost-btn" id="btn-next">下一章 →</button>
+      </nav>
+    </section>
+  </main>
+
+  <div class="tts-bar hidden" id="tts-bar">
+    <button class="icon-btn" id="tts-toggle" title="播放 / 暂停">▶</button>
+    <button class="icon-btn" id="tts-prev" title="上一句">⏮</button>
+    <button class="icon-btn" id="tts-next" title="下一句">⏭</button>
+    <span class="tts-info" id="tts-info">朗读</span>
+    <select id="tts-voice" title="音色"></select>
+    <select id="tts-rate" title="语速"></select>
+    <button class="icon-btn" id="tts-close" title="关闭朗读">✕</button>
+  </div>
+
+  <div class="progressbar"><div class="progressbar-inner" id="progressbar"></div></div>
+</div>
+
+<!-- ============ 目录侧栏 ============ -->
+<aside class="panel panel-left hidden" id="toc-panel" aria-label="目录">
+  <div class="panel-head">
+    <strong>目录 / 搜索</strong>
+    <button class="icon-btn" data-close-panel="toc-panel" aria-label="关闭">✕</button>
+  </div>
+  <div class="panel-tools">
+    <input type="search" id="toc-search" placeholder="搜索章节标题，或输入 2 字以上搜正文">
+    <div class="row">
+      <input type="number" id="toc-jump" min="1" step="1" placeholder="章节号" inputmode="numeric">
+      <button class="ghost-btn" id="toc-jump-btn">跳转</button>
+      <button class="ghost-btn" id="toc-sort">倒序</button>
+    </div>
+    <div class="muted small" id="toc-meta"></div>
+  </div>
+  <div class="toc-list" id="toc-list"></div>
+</aside>
+
+<!-- ============ 设置侧栏 ============ -->
+<aside class="panel panel-right hidden" id="settings-panel" aria-label="阅读设置">
+  <div class="panel-head">
+    <strong>阅读设置</strong>
+    <button class="icon-btn" data-close-panel="settings-panel" aria-label="关闭">✕</button>
+  </div>
+  <div class="panel-body">
+    <div class="field">
+      <label>主题</label>
+      <div class="theme-row" id="theme-row">
+        <button data-theme-value="light">白日</button>
+        <button data-theme-value="sepia">护眼</button>
+        <button data-theme-value="dark">暗色</button>
+        <button data-theme-value="night">夜间</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>阅读模式</label>
+      <div class="theme-row" id="mode-row">
+        <button data-mode-value="scroll">上下无缝滚动</button>
+        <button data-mode-value="paged">一章一页</button>
+      </div>
+    </div>
+    <div class="field"><label>字号 <span class="val" id="val-fontSize"></span></label>
+      <input type="range" id="set-fontSize" min="14" max="36" step="1"></div>
+    <div class="field"><label>行距 <span class="val" id="val-lineHeight"></span></label>
+      <input type="range" id="set-lineHeight" min="1.4" max="2.6" step="0.05"></div>
+    <div class="field"><label>字距 <span class="val" id="val-letterSpacing"></span></label>
+      <input type="range" id="set-letterSpacing" min="0" max="3" step="0.1"></div>
+    <div class="field"><label>段距 <span class="val" id="val-paragraphSpacing"></span></label>
+      <input type="range" id="set-paragraphSpacing" min="0" max="2.4" step="0.1"></div>
+    <div class="field"><label>页宽 <span class="val" id="val-pageWidth"></span></label>
+      <input type="range" id="set-pageWidth" min="480" max="1100" step="20"></div>
+    <div class="field"><label>字体</label>
+      <select id="set-fontFamily">
+        <option value="serif">宋体 / 衬线</option>
+        <option value="sans">黑体 / 无衬线</option>
+        <option value="kai">楷体</option>
+        <option value="fangsong">仿宋</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>自动滚动</label>
+      <div class="row">
+        <button class="ghost-btn" id="btn-autoscroll">开始自动滚动</button>
+        <input type="range" id="set-autoScrollSpeed" min="10" max="200" step="5">
+      </div>
+    </div>
+    <div class="field">
+      <label>数据备份</label>
+      <div class="row">
+        <button class="ghost-btn" id="btn-export-backup">导出备份</button>
+        <button class="ghost-btn" id="btn-export-light">只导进度笔记</button>
+        <button class="ghost-btn" id="btn-import-backup">恢复备份</button>
+        <input type="file" id="backup-input" accept=".json,application/json" hidden>
+      </div>
+      <div class="muted small">
+        备份是一个 JSON 文件，含书架、阅读进度、书签笔记与设置；
+        "只导进度笔记"不含正文，体积小，适合书还在、只想保住进度的情况。
+      </div>
+    </div>
+    <div class="field">
+      <button class="ghost-btn danger" id="btn-reset-settings">恢复默认设置</button>
+    </div>
+    <div class="muted small" id="app-version"></div>
+    <div class="shortcuts">
+      <strong>快捷键</strong>
+      <ul>
+        <li><kbd>←</kbd> / <kbd>→</kbd> 上一章 / 下一章</li>
+        <li><kbd>T</kbd> 目录　<kbd>S</kbd> 设置　<kbd>G</kbd> 跳章</li>
+        <li><kbd>B</kbd> 书签与笔记　<kbd>D</kbd> 加书签　<kbd>P</kbd> 朗读 / 暂停</li>
+        <li>无缝滚动模式下，上下滚动会自动接上相邻章节</li>
+        <li><kbd>+</kbd> / <kbd>-</kbd> 字号　<kbd>Esc</kbd> 关闭面板</li>
+      </ul>
+    </div>
+  </div>
+</aside>
+
+<!-- ============ 书签 / 笔记 ============ -->
+<aside class="panel panel-right hidden" id="marks-panel" aria-label="书签与笔记">
+  <div class="panel-head">
+    <strong>书签与笔记</strong>
+    <button class="icon-btn" data-close-panel="marks-panel" aria-label="关闭">✕</button>
+  </div>
+  <div class="panel-tools">
+    <div class="row">
+      <button class="primary-btn" id="btn-add-bookmark">在当前位置加书签</button>
+      <button class="ghost-btn" id="btn-export-marks">导出</button>
+    </div>
+    <div class="muted small">在正文里选中一段文字，就能把它存成笔记。</div>
+  </div>
+  <div class="toc-list" id="marks-list"></div>
+</aside>
+
+<div class="overlay hidden" id="overlay"></div>
+
+<!-- 选中文字后的浮层 -->
+<div class="sel-pop hidden" id="sel-pop">
+  <button class="ghost-btn" id="sel-note">写笔记</button>
+  <button class="ghost-btn" id="sel-mark">存为书签</button>
+</div>
+
+<!-- 笔记编辑弹窗 -->
+<div class="modal hidden" id="note-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong id="note-title">写笔记</strong>
+      <button class="icon-btn" id="note-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <blockquote class="note-quote" id="note-quote"></blockquote>
+      <div class="field"><label for="note-text">笔记内容</label>
+        <textarea id="note-text" rows="6" placeholder="写点什么……"></textarea></div>
+    </div>
+    <div class="modal-foot">
+      <button class="ghost-btn danger hidden" id="note-delete">删除</button>
+      <div class="grow"></div>
+      <button class="ghost-btn" id="note-cancel">取消</button>
+      <button class="primary-btn" id="note-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 导入 / 重新排版 弹窗 ============ -->
+<div class="modal hidden" id="import-modal" role="dialog" aria-modal="true">
+  <div class="modal-card">
+    <div class="modal-head">
+      <strong id="import-title">导入并排版</strong>
+      <button class="icon-btn" id="import-close" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="import-grid">
+        <section>
+          <h4>基本信息</h4>
+          <div class="field"><label for="import-name">书名</label>
+            <input type="text" id="import-name"></div>
+          <div class="field"><label for="import-category">分类（书架分组）</label>
+            <input type="text" id="import-category" list="category-options" placeholder="未分类">
+            <datalist id="category-options"></datalist>
+          </div>
+          <div class="field"><label for="import-encoding">文本编码</label>
+            <select id="import-encoding"></select>
+            <div class="muted small" id="import-encoding-hint"></div>
+          </div>
+
+          <h4>清洗选项</h4>
+          <label class="check"><input type="checkbox" id="opt-removeUrls"> 删除网址 / 邮箱</label>
+          <label class="check"><input type="checkbox" id="opt-removeAds"> 删除广告、水印、站点推广行</label>
+          <label class="check"><input type="checkbox" id="opt-removeSeparators"> 删除 ==== ---- 分隔线</label>
+          <label class="check"><input type="checkbox" id="opt-dropGarbledLines"> 删除整行乱码</label>
+          <label class="check"><input type="checkbox" id="opt-fixMojibake"> 尝试修复可还原的乱码</label>
+          <label class="check"><input type="checkbox" id="opt-mergeWrappedLines"> 合并硬换行、还原自然段</label>
+          <label class="check"><input type="checkbox" id="opt-normalizeSpaces"> 规范空白字符</label>
+          <label class="check"><input type="checkbox" id="opt-indentParagraphs"> 段首缩进两字</label>
+          <label class="check"><input type="checkbox" id="opt-fullWidthPunct"> 半角标点转全角</label>
+          <div class="field"><label for="opt-blankLines">段落之间保留空行数</label>
+            <input type="number" id="opt-blankLines" min="0" max="3" step="1"></div>
+          <div class="field"><label for="opt-adKeywords">额外要删除的关键词（逗号分隔）</label>
+            <input type="text" id="opt-adKeywords" placeholder="例如：本站,书号,某某书屋"></div>
+        </section>
+
+        <section>
+          <h4>章节划分规则</h4>
+          <div class="field" id="source-field" hidden>
+            <label for="opt-source">章节来源</label>
+            <select id="opt-source">
+              <option value="native">用电子书自带目录</option>
+              <option value="rules">忽略自带目录，按下面的规则识别</option>
+            </select>
+          </div>
+          <div class="rule-list" id="rule-list"></div>
+          <div class="field"><label for="opt-custom">自定义正则（匹配整行标题）</label>
+            <input type="text" id="opt-custom" placeholder="例如：^卷[一二三]\s*·\s*.+$"></div>
+          <div class="row">
+            <div class="field grow"><label for="opt-maxTitle">标题最大长度</label>
+              <input type="number" id="opt-maxTitle" min="8" max="120" step="1"></div>
+            <div class="field grow"><label for="opt-fallbackLines">无标题时每章行数</label>
+              <input type="number" id="opt-fallbackLines" min="20" max="2000" step="10"></div>
+          </div>
+          <label class="check"><input type="checkbox" id="opt-autoFallback"> 识别不到章节时按行数自动分章</label>
+          <label class="check"><input type="checkbox" id="opt-repairMissing">
+            按章节号连号补切漏掉的章（例如第 123、689 章换了写法被并进上一章）</label>
+          <div class="row">
+            <button class="ghost-btn" id="btn-auto-detect">自动识别分章方式</button>
+          </div>
+          <div class="muted small" id="repair-stats"></div>
+          <div class="muted small" id="rule-stats"></div>
+        </section>
+      </div>
+
+      <div class="preview">
+        <h4>预览 <span class="muted small" id="preview-stats"></span></h4>
+        <div class="preview-cols">
+          <div>
+            <div class="preview-label">识别到的章节（前 12 章）</div>
+            <ol class="preview-toc" id="preview-toc"></ol>
+          </div>
+          <div>
+            <div class="preview-label">排版后的正文片段</div>
+            <pre class="preview-text" id="preview-text"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="muted small" id="import-status"></span>
+      <div class="grow"></div>
+      <button class="ghost-btn hidden" id="btn-ocr-again">这页是图？用 OCR 识别</button>
+      <button class="ghost-btn" id="import-cancel">取消</button>
+      <button class="primary-btn" id="import-confirm">导入并开始阅读</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 粘贴文本弹窗 ============ -->
+<div class="modal hidden" id="paste-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong>粘贴文本导入</strong>
+      <button class="icon-btn" id="paste-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <div class="field"><label for="paste-name">书名</label><input type="text" id="paste-name" value="未命名小说"></div>
+      <div class="field"><label for="paste-text">正文</label>
+        <textarea id="paste-text" rows="14" placeholder="把小说正文粘贴到这里……"></textarea></div>
+    </div>
+    <div class="modal-foot">
+      <div class="grow"></div>
+      <button class="ghost-btn" id="paste-cancel">取消</button>
+      <button class="primary-btn" id="paste-confirm">下一步</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="batch-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong id="batch-title">正在批量导入</strong></div>
+    <div class="modal-body">
+      <div id="batch-bar"></div>
+      <p class="muted small" id="batch-status">准备中…</p>
+      <button class="ghost-btn small-btn" id="batch-play">等得无聊？玩一局「墨点跳跳」</button>
+      <div class="loader-game hidden" id="batch-game"></div>
+      <ol class="batch-list" id="batch-list"></ol>
+    </div>
+    <div class="modal-foot">
+      <div class="grow"></div>
+      <button class="ghost-btn" id="batch-cancel">停止</button>
+      <button class="primary-btn hidden" id="batch-done">完成</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="error-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong id="error-title">导入失败</strong>
+      <button class="icon-btn" id="error-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <p id="error-file" class="muted small"></p>
+      <p id="error-msg"></p>
+      <ul class="muted small" id="error-tips"></ul>
+    </div>
+    <div class="modal-foot">
+      <button class="ghost-btn hidden" id="error-action"></button>
+      <div class="grow"></div>
+      <button class="primary-btn" id="error-ok">知道了</button>
+    </div>
+  </div>
+</div>
+
+<div class="bulk-bar hidden" id="bulk-bar">
+  <span id="bulk-count">已选 0 本</span>
+  <button class="ghost-btn" id="bulk-all">全选本页</button>
+  <button class="ghost-btn" id="bulk-none">取消选择</button>
+  <div class="grow"></div>
+  <button class="ghost-btn" id="bulk-category">设为分类…</button>
+  <button class="ghost-btn danger" id="bulk-delete">删除</button>
+  <button class="icon-btn" id="bulk-exit" title="退出批量管理">✕</button>
+</div>
+
+<div class="modal hidden" id="tidy-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong>智能整理书架</strong>
+      <button class="icon-btn" id="tidy-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <p class="muted small">挑一种方式，会给所有书重新分类（原来的分类会被覆盖，可以再改回来）。</p>
+      <div class="tidy-options" id="tidy-options"></div>
+      <div class="muted small" id="tidy-preview"></div>
+    </div>
+    <div class="modal-foot">
+      <div class="grow"></div>
+      <button class="ghost-btn" id="tidy-cancel">取消</button>
+      <button class="primary-btn" id="tidy-apply">按这个整理</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="ocr-modal" role="dialog" aria-modal="true">
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong>OCR 识别扫描版 PDF</strong>
+      <button class="icon-btn" id="ocr-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <p class="muted small" id="ocr-file"></p>
+      <div class="row">
+        <div class="field grow"><label for="ocr-lang">语言</label>
+          <select id="ocr-lang"></select></div>
+        <div class="field grow"><label for="ocr-scale">清晰度</label>
+          <select id="ocr-scale"></select></div>
+      </div>
+      <div class="field"><label for="ocr-range">页码范围（留空＝全部；可写 1-20 或 1,5,8-10）</label>
+        <input type="text" id="ocr-range" placeholder="留空识别全部页"></div>
+      <div id="ocr-bar"></div>
+      <p class="muted small" id="ocr-status">识别是在你自己电脑上跑的，不会上传文件；每页大概几秒钟。</p>
+      <button class="ghost-btn small-btn hidden" id="ocr-play">等得无聊？玩一局「墨点跳跳」</button>
+      <div class="loader-game hidden" id="ocr-game"></div>
+      <pre class="preview-text hidden" id="ocr-preview"></pre>
+    </div>
+    <div class="modal-foot">
+      <button class="ghost-btn hidden danger" id="ocr-stop">停止</button>
+      <div class="grow"></div>
+      <button class="ghost-btn" id="ocr-cancel">取消</button>
+      <button class="primary-btn" id="ocr-start">开始识别</button>
+      <button class="primary-btn hidden" id="ocr-use">用识别结果导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 全局加载层 ============ -->
+<div class="loader hidden" id="loader" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-live="polite">
+  <div class="loader-card">
+    <div class="loader-head">
+      <strong id="loader-title">正在处理</strong>
+      <span class="loader-pct" id="loader-pct">0%</span>
+    </div>
+    <div id="loader-bar"></div>
+    <div class="loader-stage" id="loader-stage">准备中…</div>
+    <div class="loader-tip" id="loader-tip"></div>
+    <div class="loader-game hidden" id="loader-game"></div>
+    <div class="loader-foot">
+      <button class="ghost-btn hidden" id="loader-play">等得无聊？玩一局「墨点跳跳」</button>
+      <div class="grow"></div>
+      <button class="primary-btn hidden" id="loader-done">加载好了，去看书</button>
+    </div>
+  </div>
+</div>
+
+<div class="lightbox hidden" id="lightbox" role="dialog" aria-label="查看大图">
+  <img id="lightbox-img" alt="">
+  <div class="lightbox-caption" id="lightbox-caption"></div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>window.__NR_ASSETS = { base: 'vendor/' };</script>
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

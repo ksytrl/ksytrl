@@ -1,0 +1,23 @@
+{
+  "name": "清风阅读 · 本地小说阅读器",
+  "short_name": "清风阅读",
+  "description": "纯本地的小说阅读器：TXT / EPUB / PDF 导入，自动清理乱码与推广网址、智能排版、多规则分章与补章、无缝滚动阅读、书签笔记。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "qingfeng-novel-reader",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f4ef",
+  "theme_color": "#9a6a3a",
+  "categories": ["books", "education", "entertainment"],
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "我的书架", "url": "./index.html", "icons": [{ "src": "assets/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
