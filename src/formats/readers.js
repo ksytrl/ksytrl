@@ -11,6 +11,7 @@ import { parseEpub, htmlToText, decodeEntities, openZip } from './epub.js';
 import { parsePdf, stripRunningHeads } from './pdf.js';
 import { loadPdfjs } from './vendor.js';
 import { bytesToDataUrl, COVER_W, COVER_H } from '../cover.js';
+import { mediaToken, describeMediaTokens } from '../media.js';
 
 /** 导入分栏：每一栏只认自己的扩展名 */
 export const FORMAT_GROUPS = [
@@ -58,26 +59,117 @@ export function groupOf(name) {
 
 /* ---------------- PDF ---------------- */
 
-/** pdf.js 的文字块 → 按行合并 */
+/** pdf.js 的文字块 → 按行合并，同时记下每行的纵坐标（用来把图片插回原位） */
 function pdfItemsToLines(items) {
   const lines = [];
   let current = '';
+  let y = null;
   for (const item of items) {
     if (typeof item.str !== 'string') continue;
+    if (y == null && item.transform) y = item.transform[5];
     current += item.str;
     if (item.hasEOL) {
-      if (current.trim()) lines.push(current.trim());
+      if (current.trim()) lines.push({ text: current.trim(), y });
       current = '';
+      y = null;
     }
   }
-  if (current.trim()) lines.push(current.trim());
+  if (current.trim()) lines.push({ text: current.trim(), y });
   return lines;
 }
 
+/* ---- PDF 里的图片：按操作符列表跟踪变换矩阵，算出每张图在页面上的位置 ---- */
+const mulMatrix = (m, n) => [
+  m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3],
+  m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3],
+  m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5],
+];
+
+export function pdfImageBoxes(ops, OPS) {
+  const paintOps = new Set([
+    OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageXObjectRepeat, OPS.paintJpegXObject,
+  ].filter((v) => v != null));
+  const boxes = [];
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const stack = [];
+  for (let i = 0; i < ops.fnArray.length; i += 1) {
+    const fn = ops.fnArray[i];
+    const args = ops.argsArray[i];
+    if (fn === OPS.save) stack.push(ctm.slice());
+    else if (fn === OPS.restore) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
+    else if (fn === OPS.transform) ctm = mulMatrix(args, ctm);
+    else if (fn === OPS.paintFormXObjectBegin) {
+      stack.push(ctm.slice());
+      if (args && Array.isArray(args[0]) && args[0].length === 6) ctm = mulMatrix(args[0], ctm);
+    } else if (fn === OPS.paintFormXObjectEnd) ctm = stack.pop() || ctm;
+    else if (paintOps.has(fn)) {
+      const pts = [[0, 0], [1, 0], [0, 1], [1, 1]]
+        .map(([x, y]) => [ctm[0] * x + ctm[2] * y + ctm[4], ctm[1] * x + ctm[3] * y + ctm[5]]);
+      const xs = pts.map((p) => p[0]);
+      const ys = pts.map((p) => p[1]);
+      boxes.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) });
+    }
+  }
+  return boxes;
+}
+
+const canvasToBlob = (canvas) => new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+
+/** 把一页里的图片裁出来；背景图、装饰小图会被过滤掉 */
+async function extractPdfPageImages(page, pdfjs, pageNo, textLength) {
+  const ops = await page.getOperatorList();
+  const boxes = pdfImageBoxes(ops, pdfjs.OPS);
+  if (!boxes.length) return [];
+  const base = page.getViewport({ scale: 1 });
+  const pageArea = base.width * base.height;
+  const scale = Math.min(2.5, 1600 / base.width);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  await page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport }).promise;
+
+  const images = [];
+  for (const box of boxes) {
+    const area = (box.x1 - box.x0) * (box.y1 - box.y0);
+    if (area > pageArea * 0.8 && textLength > 80) continue;       // 整页背景 / 水印
+    const [a, b, c, d] = viewport.convertToViewportRectangle([box.x0, box.y0, box.x1, box.y1]);
+    const left = Math.max(0, Math.floor(Math.min(a, c)));
+    const top = Math.max(0, Math.floor(Math.min(b, d)));
+    const width = Math.min(canvas.width, Math.ceil(Math.max(a, c))) - left;
+    const height = Math.min(canvas.height, Math.ceil(Math.max(b, d))) - top;
+    if (width < 48 || height < 48) continue;                        // 装饰小图、图标
+    const crop = document.createElement('canvas');
+    crop.width = width;
+    crop.height = height;
+    crop.getContext('2d').drawImage(canvas, left, top, width, height, 0, 0, width, height);
+    // eslint-disable-next-line no-await-in-loop
+    const blob = await canvasToBlob(crop);
+    if (blob) {
+      images.push({ key: `p${pageNo}i${images.length + 1}`, blob, mime: 'image/jpeg', top: box.y1 });
+    }
+  }
+  canvas.width = 0;
+  canvas.height = 0;
+  return images;
+}
+
+/** 按纵坐标把图片标记插回这一页的文字里（PDF 坐标 y 向上） */
+function mergeLinesAndImages(lines, images) {
+  const out = lines.map((l) => ({ ...l }));
+  for (const image of [...images].sort((p, q) => q.top - p.top)) {
+    const index = out.findIndex((l) => l.y != null && l.y < image.top && !l.media);
+    const entry = { text: mediaToken(image.key), y: image.top, media: true };
+    if (index === -1) out.push(entry);
+    else out.splice(index, 0, entry);
+  }
+  return out.map((l) => l.text);
+}
+
 /**
- * 用 pdf.js 提取文字。
+ * 用 pdf.js 提取文字和插图。
  * @param {ArrayBuffer} buffer
- * @param {{onProgress?: Function, onPassword?: Function}} options
+ * @param {{onProgress?: Function, onPassword?: Function, withImages?: boolean}} options
  */
 export async function extractPdfWithPdfjs(buffer, options = {}) {
   const pdfjs = await loadPdfjs();
@@ -97,11 +189,20 @@ export async function extractPdfWithPdfjs(buffer, options = {}) {
   }
   const doc = await task.promise;
   const pages = [];
+  const media = [];
+  const withImages = options.withImages !== false && typeof document !== 'undefined';
   for (let i = 1; i <= doc.numPages; i += 1) {
     /* eslint-disable no-await-in-loop */
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
-    pages.push(pdfItemsToLines(content.items).join('\n'));
+    const lines = pdfItemsToLines(content.items);
+    let images = [];
+    if (withImages) {
+      const textLength = lines.reduce((n, l) => n + l.text.length, 0);
+      try { images = await extractPdfPageImages(page, pdfjs, i, textLength); } catch { images = []; }
+    }
+    media.push(...images);
+    pages.push(mergeLinesAndImages(lines, images).join('\n'));
     page.cleanup();
     /* eslint-enable no-await-in-loop */
     if (options.onProgress) options.onProgress(i, doc.numPages);
@@ -125,14 +226,16 @@ export async function extractPdfWithPdfjs(buffer, options = {}) {
 
   doc.destroy();
   const cleaned = stripRunningHeads(pages);
-  return { title, pages: cleaned, text: cleaned.filter(Boolean).join('\n\n'), via: 'pdf.js', cover };
+  return {
+    title, pages: cleaned, text: cleaned.filter(Boolean).join('\n\n'), via: 'pdf.js', cover, media,
+  };
 }
 
 export async function readPdf(buffer, options = {}) {
   let lastError = null;
   try {
     const result = await extractPdfWithPdfjs(buffer, options);
-    if (result.text.replace(/\s/g, '')) return result;
+    if (describeMediaTokens(result.text, '').replace(/\s/g, '')) return result;
     lastError = new Error('这个 PDF 里没有可提取的文字（多半是扫描图片版，需要先 OCR 转成文字）');
   } catch (err) {
     lastError = err;
@@ -327,7 +430,13 @@ export async function readAnyFile(file, options = {}) {
   if (ext === 'pdf') {
     const pdf = await readPdf(buffer, options);
     return {
-      ...base, kind: 'pdf', raw: pdf.text, name: cleanBookTitle(pdf.title || file.name), via: pdf.via, cover: pdf.cover || null,
+      ...base,
+      kind: 'pdf',
+      raw: pdf.text,
+      name: cleanBookTitle(pdf.title || file.name),
+      via: pdf.via,
+      cover: pdf.cover || null,
+      media: pdf.media || [],
     };
   }
   if (ext === 'epub') {
@@ -341,6 +450,7 @@ export async function readAnyFile(file, options = {}) {
       name: cleanBookTitle(book.title || file.name),
       author: book.author || '',
       cover: book.cover ? bytesToDataUrl(book.cover.bytes, book.cover.mime) : null,
+      media: book.media || [],
     };
   }
   if (ext === 'docx') {

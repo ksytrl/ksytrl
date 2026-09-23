@@ -6,6 +6,8 @@
 
 export const TTS_RATES = [0.75, 0.9, 1, 1.15, 1.3, 1.5, 1.8, 2];
 
+import { isMediaLine } from './media.js';
+
 /** 把一段正文切成句子；句末标点后面紧跟的引号、括号算在同一句里 */
 export function splitSentences(text) {
   const END = '。！？…；!?;';
@@ -13,7 +15,7 @@ export function splitSentences(text) {
   const sentences = [];
   for (const rawLine of String(text || '').split('\n')) {
     const line = rawLine.trim();
-    if (!line) continue;
+    if (!line || isMediaLine(line)) continue;   // 图片 / 视频不朗读
     const chars = [...line];
     let buffer = '';
     for (let i = 0; i < chars.length; i += 1) {

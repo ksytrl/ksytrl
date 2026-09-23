@@ -10,6 +10,7 @@
 import {
   looksLikeHeading, looksLikeLooseHeading, compileRules, DEFAULT_SPLIT_OPTIONS,
 } from './chapters.js';
+import { isMediaLine } from './media.js';
 
 export const CLEAN_DEFAULTS = {
   removeUrls: true,        // 删除网址
@@ -189,6 +190,12 @@ export function cleanText(raw, options = {}, splitOptions = {}) {
   for (const original of lines) {
     let line = original;
 
+    // 图片 / 视频占位标记：原样保留，不参与任何清洗规则
+    if (isMediaLine(line)) {
+      cleaned.push(line.trim());
+      continue;
+    }
+
     if (opts.fixMojibake) {
       const fixed = tryFixMojibake(line);
       if (fixed !== line) {
@@ -246,7 +253,8 @@ export function cleanText(raw, options = {}, splitOptions = {}) {
       }
       // 规则识别到的标题、以及"疑似标题"（例如只写了 123 的那种）都不参与合并，
       // 否则漏识别的标题会被粘进正文，后面就再也补不回来了
-      if (looksLikeHeading(trimmed, headingOpts) || looksLikeLooseHeading(trimmed, splitOpts.maxTitleLength)) {
+      if (isMediaLine(trimmed)
+        || looksLikeHeading(trimmed, headingOpts) || looksLikeLooseHeading(trimmed, splitOpts.maxTitleLength)) {
         merged.push(trimmed);
         continue;
       }
@@ -254,6 +262,7 @@ export function cleanText(raw, options = {}, splitOptions = {}) {
       while (wrapWidth > 0 && i + 1 < cleaned.length) {
         const next = cleaned[i + 1] ? cleaned[i + 1].trim() : '';
         if (!next) break;
+        if (isMediaLine(next)) break;
         if (looksLikeHeading(next, headingOpts) || looksLikeLooseHeading(next, splitOpts.maxTitleLength)) break;
         if (current.length < wrapWidth) break;
         if (ENDING_PUNCT.test(current)) break;
@@ -281,7 +290,7 @@ export function cleanText(raw, options = {}, splitOptions = {}) {
       continue;
     }
     blank = 0;
-    const isHeading = looksLikeHeading(line, headingOpts);
+    const isHeading = isMediaLine(line) || looksLikeHeading(line, headingOpts);
     if (opts.indentParagraphs && !isHeading) out.push(`　　${line.trim()}`);
     else out.push(line.trim());
   }

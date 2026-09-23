@@ -5,6 +5,7 @@
  */
 import { readZip, readZipText } from './zip.js';
 import { loadJsZip } from './vendor.js';
+import { mediaToken, guessMime } from '../media.js';
 
 const ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ldquo: '“', rdquo: '”',
@@ -16,6 +17,63 @@ export function decodeEntities(text) {
     .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
     .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
     .replace(/&([a-z]+);/gi, (m, name) => (ENTITIES[name.toLowerCase()] != null ? ENTITIES[name.toLowerCase()] : m));
+}
+
+
+/** 精确取属性（避免 src 误匹配到 data-src 之类） */
+function attrExact(tag, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\:]/g, '\\$&');
+  const m = tag.match(new RegExp(`(?:^|[\\s<])${escaped}\\s*=\\s*["']([^"']*)["']`, 'i'));
+  return m ? m[1] : '';
+}
+
+/**
+ * 把一篇 XHTML 里的图片 / 视频 / 音频换成占位标记，并登记要读取的文件。
+ * @param {Map} registry 路径 → { key, mime, alt }，同一张图在全书里只存一份
+ */
+function replaceMediaTags(html, docPath, registry) {
+  const base = docPath.includes('/') ? docPath.replace(/[^/]+$/, '') : '';
+  const register = (src, fallbackMime, alt) => {
+    if (!src || /^(https?:|javascript:)/i.test(src)) return '';
+    const path = /^data:/i.test(src) ? src : resolvePath(base, src);
+    if (!path) return '';
+    if (!registry.has(path)) {
+      registry.set(path, {
+        key: `m${registry.size + 1}`,
+        mime: /^data:([^;,]+)/i.test(path) ? path.match(/^data:([^;,]+)/i)[1] : (guessMime(path) || fallbackMime),
+        alt: alt || '',
+      });
+    }
+    return `<p>${mediaToken(registry.get(path).key)}</p>`;
+  };
+
+  let out = String(html || '');
+  // 先处理 <video>/<audio>：它们可能套着 <source>，也可能带 poster 图
+  out = out.replace(/<((?:[\w-]+:)?(?:video|audio))\b([^>]*)>([\s\S]*?)<\/\1>/gi, (m, tag, attrs, inner) => {
+    const src = attrExact(attrs, 'src')
+      || ((inner.match(/<(?:[\w-]+:)?source\b[^>]*>/i) || [''])[0] && attrExact((inner.match(/<(?:[\w-]+:)?source\b[^>]*>/i) || [''])[0], 'src'));
+    const kind = /audio$/i.test(tag) ? 'audio/mpeg' : 'video/mp4';
+    return register(src, kind, '') || '';
+  });
+  out = out.replace(/<(?:[\w-]+:)?(?:video|audio)\b[^>]*\/>/gi, (m) => register(attrExact(m, 'src'), 'video/mp4', ''));
+  // <img> 与 SVG 里的 <image>
+  out = out.replace(/<(?:[\w-]+:)?(?:img|image)\b[^>]*>/gi, (m) => {
+    const src = attrExact(m, 'src') || attrExact(m, 'xlink:href') || attrExact(m, 'href');
+    return register(src, 'image/jpeg', attrExact(m, 'alt') || attrExact(m, 'title'));
+  });
+  return out;
+}
+
+function decodeDataUri(uri) {
+  const m = String(uri).match(/^data:([^;,]+)?(;base64)?,(.*)$/i);
+  if (!m) return null;
+  if (m[2]) {
+    const bin = atob(m[3]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  return new TextEncoder().encode(decodeURIComponent(m[3]));
 }
 
 /** HTML / XHTML → 纯文本，保留段落换行 */
@@ -231,9 +289,12 @@ export async function parseEpub(buffer) {
   }
 
   const chapters = [];
+  const mediaRegistry = new Map();
   for (const doc of docs) {
-    const html = await zip.text(doc.href);
-    if (html == null) continue;
+    const rawHtml = await zip.text(doc.href);
+    if (rawHtml == null) continue;
+    // 图片 / 视频先换成占位标记，再转文本，否则会跟着标签一起被剥掉
+    const html = replaceMediaTags(rawHtml, doc.href, mediaRegistry);
     const content = htmlToText(html);
     if (!content.replace(/\s/g, '')) continue;
     const label = tocMap.get(doc.href) || firstTagText(html)
@@ -244,6 +305,16 @@ export async function parseEpub(buffer) {
     chapters.push({ title: label, content: lines.join('\n') });
   }
 
+  // 把登记过的媒体文件本体读出来
+  const media = [];
+  for (const [path, info] of mediaRegistry) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = /^data:/i.test(path) ? decodeDataUri(path) : await zip.bytes(path);
+      if (bytes && bytes.length) media.push({ key: info.key, bytes, mime: info.mime, alt: info.alt, name: path.split('/').pop() });
+    } catch { /* 单个文件读不出来不影响整本书 */ }
+  }
+
   const text = chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n');
-  return { title, author, chapters, text, cover };
+  return { title, author, chapters, text, cover, media };
 }

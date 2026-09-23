@@ -17,12 +17,15 @@ import {
 import {
   listBooks, getContent, saveBook, updateBook, deleteBook, newId,
   getMarks, saveMarks, markCounts, exportBackup, importBackup,
-  saveCover, getCover,
+  saveCover, getCover, saveMedia, listMedia,
   loadSettings, saveSettings, DEFAULT_SETTINGS,
 } from './store.js';
+import {
+  isMediaLine, mediaKeyOf, describeMediaTokens, mediaKind,
+} from './media.js';
 import { generateCover, fitCover } from './cover.js';
 
-const APP_VERSION = '1.9.0';   // 显示在阅读设置里，方便确认用的是哪一版
+const APP_VERSION = '1.10.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -51,6 +54,8 @@ const state = {
   marks: [],           // 当前书的书签与笔记
   markCounts: new Map(),
   covers: new Map(),
+  mediaIndex: new Map(),  // 当前书的图片 / 视频：key → { mime, alt, blob }
+  mediaUrls: new Map(),   // key → blob URL（换书时统一释放）
   shelf: { selecting: false, picked: new Set(), page: 1, status: 'all', tidyPlan: 'format' },
   editingMark: null,
   ocr: null,
@@ -667,6 +672,8 @@ function renderShelf() {
 function showShelf() {
   stopAutoScroll();
   stopTts();
+  releaseMediaUrls();
+  state.mediaIndex = new Map();
   state.book = null;
   state.marks = [];
   $('view-shelf').classList.remove('hidden');
@@ -830,7 +837,15 @@ function runPreview() {
   });
   if (chapters.length > 12) list.appendChild(el('li', 'muted', `… 共 ${fmtNum(chapters.length)} 章`));
 
-  $('preview-text').textContent = text.slice(0, 900) || '（清洗后内容为空，请检查清洗选项）';
+  $('preview-text').textContent = describeMediaTokens(text.slice(0, 900)) || '（清洗后内容为空，请检查清洗选项）';
+  const mediaCount = (pending.media || []).length;
+  if (mediaCount) {
+    const videos = pending.media.filter((m) => /^video\//.test(m.mime)).length;
+    const audios = pending.media.filter((m) => /^audio\//.test(m.mime)).length;
+    const images = mediaCount - videos - audios;
+    const parts = [images && `${images} 张图片`, videos && `${videos} 段视频`, audios && `${audios} 段音频`].filter(Boolean);
+    $('preview-stats').textContent += `；另含 ${parts.join('、')}，会原位显示`;
+  }
   $('import-status').textContent = usedFallback
     ? `未匹配到章节标题，已按每 ${splitOpts.fallbackLines} 行自动分为 ${chapters.length} 章`
     : `识别到 ${fmtNum(chapters.length)} 章${useNative ? '（来自电子书自带目录）' : ''}`;
@@ -864,6 +879,7 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
     kind: encodingInfo.kind || 'txt',
     file: encodingInfo.file || null,
     cover: encodingInfo.cover || null,
+    media: encodingInfo.media || [],
   };
   // PDF 文字提取不理想时，可以直接转去 OCR
   $('btn-ocr-again').classList.toggle('hidden', !(encodingInfo.file && extOf(encodingInfo.file.name) === 'pdf'));
@@ -992,6 +1008,10 @@ async function confirmImport() {
     const dataUrl = pending.cover ? await fitCover(pending.cover) : generateCover({ title, kind: meta.kind });
     await saveCover(id, dataUrl, pending.cover ? 'embedded' : 'generated');
   } catch { /* 封面失败不影响导入 */ }
+  // 书里的图片 / 视频
+  if (pending.media && pending.media.length) {
+    try { await saveMedia(id, pending.media); } catch (err) { toast(`图片保存失败：${err.message}`); }
+  }
 
   hideModal('import-modal');
   state.pending = null;
@@ -1171,6 +1191,9 @@ async function batchImport(files) {
         const dataUrl = info.cover ? await fitCover(info.cover) : generateCover({ title: info.name, kind: info.kind });
         await saveCover(meta.id, dataUrl, info.cover ? 'embedded' : 'generated');
       } catch { /* 封面失败不影响入库 */ }
+      if (info.media && info.media.length) {
+        try { await saveMedia(meta.id, info.media); } catch { /* 媒体失败不影响入库 */ }
+      }
       existing.push(meta);
       ok += 1;
       const repaired = split && split.repair && split.repair.inserted ? `，补回 ${split.repair.inserted} 章` : '';
@@ -1234,6 +1257,12 @@ async function openBook(id) {
   const content = await getContent(id);
   if (!content) { toast('正文数据丢失，请重新导入'); return; }
 
+  releaseMediaUrls();
+  state.mediaIndex = new Map();
+  try {
+    for (const row of await listMedia(id)) state.mediaIndex.set(row.key, row);
+  } catch { /* 读不到媒体就当纯文字书 */ }
+
   state.book = meta;
   state.chapterTexts = content.chapterTexts && content.chapterTexts.length
     ? content.chapterTexts
@@ -1272,6 +1301,48 @@ function isScrollMode() {
 }
 
 /** 把一章正文转成段落 HTML */
+/* ---------------- 书内图片 / 视频 ---------------- */
+function mediaUrl(key) {
+  if (state.mediaUrls.has(key)) return state.mediaUrls.get(key);
+  const row = state.mediaIndex.get(key);
+  if (!row || !row.blob) return '';
+  const url = URL.createObjectURL(row.blob);
+  state.mediaUrls.set(key, url);
+  return url;
+}
+
+function releaseMediaUrls() {
+  for (const url of state.mediaUrls.values()) URL.revokeObjectURL(url);
+  state.mediaUrls.clear();
+}
+
+/** 把一行 [[media:KEY]] 渲染成图片 / 视频 / 音频 */
+function mediaHtml(line) {
+  const key = mediaKeyOf(line);
+  const row = key ? state.mediaIndex.get(key) : null;
+  if (!row) {
+    return '<figure class="book-media missing"><div class="media-missing">［这里原本有一张图片或视频，'
+      + '但导入时没有保存下来。重新导入这本书即可看到］</div></figure>';
+  }
+  const url = mediaUrl(key);
+  const alt = escapeHtml(row.alt || '');
+  const kind = mediaKind(row.mime);
+  let body;
+  if (kind === 'video') body = `<video controls preload="metadata" src="${url}" data-media="${key}"></video>`;
+  else if (kind === 'audio') body = `<audio controls preload="metadata" src="${url}" data-media="${key}"></audio>`;
+  else body = `<img src="${url}" alt="${alt}" loading="lazy" data-media="${key}" title="点击查看大图">`;
+  const caption = row.alt ? `<figcaption>${alt}</figcaption>` : '';
+  return `<figure class="book-media ${kind}">${body}${caption}</figure>`;
+}
+
+function openLightbox(src, alt) {
+  const box = $('lightbox');
+  $('lightbox-img').src = src;
+  $('lightbox-img').alt = alt || '';
+  $('lightbox-caption').textContent = alt || '';
+  box.classList.remove('hidden');
+}
+
 function ttsActiveFor(index) {
   return !!(state.tts && state.tts.chapterIndex === index);
 }
@@ -1284,6 +1355,7 @@ function chapterInnerHtml(index) {
     const html = text.split('\n').map((line) => {
       const trimmed = line.trim();
       if (!trimmed) return '<p class="blank"></p>';
+      if (isMediaLine(trimmed)) return mediaHtml(trimmed);
       const indent = (line.match(/^[\s　]*/) || [''])[0];
       const inner = splitSentences(trimmed)
         .map((sentence) => {
@@ -1300,6 +1372,7 @@ function chapterInnerHtml(index) {
   const html = text.split('\n').map((line) => {
     const t = line.trim();
     if (!t) return '<p class="blank"></p>';
+    if (isMediaLine(t)) return mediaHtml(t);
     let safe = escapeHtml(line);
     if (state.highlight) {
       const re = new RegExp(escapeRegExp(state.highlight), 'gi');
@@ -1901,7 +1974,7 @@ function stopAutoScroll() {
  * =======================================================*/
 function exportClean() {
   if (!state.book) return;
-  const blob = new Blob([state.cleanTextValue], { type: 'text/plain;charset=utf-8' });
+  const blob = new Blob([describeMediaTokens(state.cleanTextValue)], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -2028,6 +2101,11 @@ function bindEvents() {
     hideSelPop();
     addBookmark(text);
   });
+  $('view-reader').addEventListener('click', (e) => {
+    const img = e.target.closest && e.target.closest('.book-media img');
+    if (img) openLightbox(img.src, img.alt);
+  });
+  $('lightbox').addEventListener('click', () => $('lightbox').classList.add('hidden'));
   $('btn-tts').addEventListener('click', toggleTts);
   $('tts-toggle').addEventListener('click', toggleTts);
   $('tts-prev').addEventListener('click', () => { if (state.tts) state.tts.speaker.jump(-1); updateTtsBar(); });
@@ -2147,6 +2225,7 @@ function bindEvents() {
     }
     if (e.key === 'Escape') {
       closePanels(); hideSelPop();
+      $('lightbox').classList.add('hidden');
       hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal');
       hideModal('error-modal'); hideModal('ocr-modal'); hideModal('tidy-modal');
       return;

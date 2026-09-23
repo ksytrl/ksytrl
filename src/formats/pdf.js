@@ -301,6 +301,7 @@ export function stripRunningHeads(pages) {
   for (const lines of lineSets) {
     for (const idx of edgeIndexes(lines)) {
       const line = (lines[idx] || '').trim();
+      if (/^\[\[media:/.test(line)) continue;
       if (line && line.length <= 40) counts.set(line, (counts.get(line) || 0) + 1);
     }
   }
@@ -313,7 +314,7 @@ export function stripRunningHeads(pages) {
     const out = [...lines];
     for (const idx of edgeIndexes(out)) {
       const line = (out[idx] || '').trim();
-      if (!line) continue;
+      if (!line || /^\[\[media:[A-Za-z0-9_-]+\]\]$/.test(line)) continue;
       if (isPageNumber(line) || (counts.get(line) || 0) >= threshold) out[idx] = '';
     }
     return out.join('\n').trim();

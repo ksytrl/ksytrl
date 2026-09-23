@@ -15,6 +15,9 @@ import {
 } from '../src/formats/readers.js';
 import { parsePageRange, tidyOcrText, ocrPaths, OCR_LANGS } from '../src/formats/ocr.js';
 import { splitSentences, TTS_RATES } from '../src/tts.js';
+import {
+  isMediaLine, mediaKeyOf, describeMediaTokens, guessMime, mediaKind,
+} from '../src/media.js';
 
 const readBuffer = async (path) => {
   const buf = await readFile(new URL(path, import.meta.url));
@@ -286,6 +289,38 @@ group('朗读（分句）');
   check('没有标点的行也单独成句', sentences[sentences.length - 1] === '没有标点的一行', JSON.stringify(sentences));
   check('空行不会产生空句子', splitSentences('甲。\n\n\n乙。').length === 2, JSON.stringify(splitSentences('甲。\n\n\n乙。')));
   check('提供多档语速', TTS_RATES.includes(1) && TTS_RATES.length >= 6, JSON.stringify(TTS_RATES));
+}
+
+/* ---------- 书内图片 / 视频 ---------- */
+group('书内图片与视频');
+{
+  check('识别媒体标记行', isMediaLine('[[media:m1]]') && isMediaLine('  [[media:p3i2]]  ') && !isMediaLine('正文[[media:m1]]'));
+  check('取出标记里的 key', mediaKeyOf('[[media:p3i2]]') === 'p3i2');
+  check('导出时标记换成文字', describeMediaTokens('甲\n[[media:m1]]\n乙') === '甲\n［图片］\n乙');
+  check('按扩展名判断类型', guessMime('a/b.PNG') === 'image/png' && mediaKind(guessMime('x.webm')) === 'video' && mediaKind(guessMime('x.mp3')) === 'audio');
+
+  // 清洗 / 排版不能动媒体标记：不缩进、不合并进上一段、不被当成乱码删掉
+  const lines = ['第一章 开始'];
+  for (let i = 0; i < 12; i += 1) {
+    lines.push('这是一段被硬换行截断的正文内容它足够长所以会被切开继续');
+    lines.push('后半句。');
+  }
+  lines.splice(3, 0, '[[media:m1]]');
+  const cleaned = cleanText(lines.join('\n'), {}, { ruleIds: ['cn-chapter'] }).text;
+  check('清洗后标记原样保留、单独成行', cleaned.split('\n').includes('[[media:m1]]'), cleaned.slice(0, 80));
+  check('标记不会被粘进正文', !/\S\[\[media/.test(cleaned) && !cleaned.includes('　　[[media'), '');
+  check('朗读跳过图片', splitSentences('甲。\n[[media:m1]]\n乙。').join('|') === '甲。|乙。');
+
+  const epub = await parseEpub(await readBuffer('../samples/sample-media.epub'));
+  check('EPUB 抽出插图、SVG 封面页与视频', epub.media.length === 3
+    && epub.media.some((m) => m.mime === 'video/webm') && epub.media.some((m) => m.alt === '林间小路'),
+    JSON.stringify(epub.media.map((m) => [m.key, m.mime, m.alt])));
+  const chap1 = epub.chapters.find((c) => c.title === '第一章 插图');
+  check('插图标记落在原文两段之间', /他在林间遇见了那个人。\n\[\[media:m\d\]\]\n/.test(chap1.content), JSON.stringify(chap1.content));
+  const chap2 = epub.chapters.find((c) => c.title === '第二章 影像');
+  check('同一张图多处引用只存一份', (chap2.content.match(/\[\[media:m2\]\]/g) || []).length === 1 && epub.media.filter((m) => m.alt === '林间小路').length === 1,
+    JSON.stringify(chap2.content));
+  check('data-src 之类的属性不会被误当成图片', !epub.media.some((m) => /ignore/.test(m.name || '')), '');
 }
 
 console.log(results.join('\n'));

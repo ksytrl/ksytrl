@@ -12,6 +12,7 @@ const read = (p) => readFileSync(resolve(root, p), 'utf8');
 
 // 依赖顺序：被依赖的排前面
 const MODULES = [
+  'src/media.js',
   'src/encoding.js',
   'src/chapters.js',
   'src/cleaner.js',

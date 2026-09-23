@@ -4,11 +4,12 @@
  */
 
 const DB_NAME = 'novel-reader';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_BOOKS = 'books';
 const STORE_CONTENT = 'contents';
 const STORE_MARKS = 'marks';   // 书签与笔记
 const STORE_COVERS = 'covers'; // 书架封面（dataURL）
+const STORE_MEDIA = 'media';   // 书里的图片 / 视频 / 音频（Blob），id = 书id:key
 const SETTINGS_KEY = 'novel-reader:settings';
 
 let dbPromise = null;
@@ -30,6 +31,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains(STORE_COVERS)) {
         db.createObjectStore(STORE_COVERS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_MEDIA)) {
+        db.createObjectStore(STORE_MEDIA, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -103,13 +107,78 @@ export async function updateBook(meta) {
 }
 
 export async function deleteBook(id) {
-  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS, STORE_COVERS], 'readwrite', ([books, contents, marks, covers]) => {
-    books.delete(id);
-    contents.delete(id);
-    marks.delete(id);
-    covers.delete(id);
-  });
+  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS, STORE_COVERS, STORE_MEDIA], 'readwrite',
+    ([books, contents, marks, covers, media]) => {
+      books.delete(id);
+      contents.delete(id);
+      marks.delete(id);
+      covers.delete(id);
+      media.delete(mediaRange(id));
+    });
 }
+
+/* ---------------- 书内图片 / 视频 ---------------- */
+
+const mediaRange = (bookId) => IDBKeyRange.bound(`${bookId}:`, `${bookId}:\uffff`);
+
+const toBlob = (item) => {
+  if (item.blob instanceof Blob) return item.blob;
+  return new Blob([item.bytes || new Uint8Array(0)], { type: item.mime || 'application/octet-stream' });
+};
+
+/** @param {Array<{key:string, blob?:Blob, bytes?:Uint8Array, mime:string, alt?:string, name?:string}>} items */
+export async function saveMedia(bookId, items) {
+  if (!items || !items.length) return 0;
+  await tx(STORE_MEDIA, 'readwrite', (store) => {
+    for (const item of items) {
+      const blob = toBlob(item);
+      store.put({
+        id: `${bookId}:${item.key}`,
+        bookId,
+        key: item.key,
+        mime: item.mime || blob.type || 'application/octet-stream',
+        alt: item.alt || '',
+        name: item.name || '',
+        size: blob.size,
+        blob,
+      });
+    }
+  });
+  return items.length;
+}
+
+/** 当前书的所有媒体（Blob 只是句柄，真正读的时候才加载） */
+export async function listMedia(bookId) {
+  const rows = await tx(STORE_MEDIA, 'readonly', (store) => reqValue(store.getAll(mediaRange(bookId))));
+  return rows || [];
+}
+
+export async function mediaCounts() {
+  const rows = await tx(STORE_MEDIA, 'readonly', (store) => reqValue(store.getAllKeys()));
+  const map = new Map();
+  for (const key of rows || []) {
+    const bookId = String(key).split(':')[0];
+    map.set(bookId, (map.get(bookId) || 0) + 1);
+  }
+  return map;
+}
+
+const blobToBase64 = (blob) => blob.arrayBuffer().then((buf) => {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+});
+
+const base64ToBytes = (b64) => {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+};
+
+/** 单个超过这个大小的视频不放进备份，免得备份文件大到打不开 */
+export const BACKUP_MEDIA_LIMIT = 30 * 1024 * 1024;
 
 /* ---------------- 封面 ---------------- */
 
@@ -167,7 +236,7 @@ export async function exportBackup(options = {}) {
   const books = await listBooks();
   const out = {
     format: BACKUP_FORMAT,
-    version: 2,
+    version: 3,
     createdAt: Date.now(),
     includeText,
     settings: loadSettings(),
@@ -182,6 +251,16 @@ export async function exportBackup(options = {}) {
     if (includeText) {
       const cover = await getCover(meta.id);
       if (cover && cover.dataUrl) entry.cover = { dataUrl: cover.dataUrl, source: cover.source };
+      const media = await listMedia(meta.id);
+      if (media.length) {
+        entry.media = [];
+        for (const row of media) {
+          if (row.size > BACKUP_MEDIA_LIMIT) { out.skippedMedia = (out.skippedMedia || 0) + 1; continue; }
+          entry.media.push({
+            key: row.key, mime: row.mime, alt: row.alt, name: row.name, data: await blobToBase64(row.blob),
+          });
+        }
+      }
     }
     if (includeText) {
       const content = await getContent(meta.id);
@@ -243,6 +322,10 @@ export async function importBackup(data, options = {}) {
     if (!entry.content) { result.skipped += 1; continue; }   // 轻量备份里没有正文，书不在就没法恢复
     await saveBook(meta, entry.content);
     if ((entry.marks || []).length) await saveMarks(meta.id, entry.marks);
+    if (entry.cover && entry.cover.dataUrl) await saveCover(meta.id, entry.cover.dataUrl, entry.cover.source || 'restored');
+    if ((entry.media || []).length) {
+      await saveMedia(meta.id, entry.media.map((m) => ({ ...m, bytes: base64ToBytes(m.data) })));
+    }
     result.restored += 1;
     /* eslint-enable no-await-in-loop */
   }

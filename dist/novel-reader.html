@@ -478,6 +478,25 @@ kbd {
   .side-item { padding: 6px 10px; }
 }
 
+/* ===== 书内图片 / 视频 ===== */
+.book-media { margin: 1.2em auto; text-align: center; }
+.book-media img, .book-media video {
+  max-width: 100%; max-height: 80vh; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,.12);
+}
+.book-media img { cursor: zoom-in; }
+.book-media audio { width: 100%; }
+.book-media figcaption { font-size: .8em; color: var(--text-dim); margin-top: .5em; }
+.book-media .media-missing {
+  font-size: 13px; color: var(--text-dim); padding: 14px; border: 1px dashed var(--border); border-radius: 8px;
+}
+html[data-theme="night"] .book-media img, html[data-theme="dark"] .book-media img { filter: brightness(.88); }
+.lightbox {
+  position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,.88); cursor: zoom-out;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px;
+}
+.lightbox img { max-width: 96vw; max-height: 88vh; object-fit: contain; }
+.lightbox-caption { color: #ddd; font-size: 13px; margin-top: 10px; }
+
 </style>
 
 <meta name="theme-color" content="#9a6a3a">
@@ -951,6 +970,11 @@ kbd {
   </div>
 </div>
 
+<div class="lightbox hidden" id="lightbox" role="dialog" aria-label="查看大图">
+  <img id="lightbox-img" alt="">
+  <div class="lightbox-caption" id="lightbox-caption"></div>
+</div>
+
 <div class="toast" id="toast" hidden></div>
 
 <script>window.__NR_ASSETS = { base: null };</script>
@@ -1025,6 +1049,50 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 <script>
 (function () {
 'use strict';
+/* ===== src/media.js ===== */
+/**
+ * 书里的图片 / 视频 / 音频：
+ * 导入时把文件本体存进 IndexedDB，正文里只留一行占位标记 [[media:KEY]]，
+ * 阅读时再把标记换成 <img> / <video> / <audio>。
+ * 标记是纯 ASCII、单独成行，清洗、排版、分章、朗读都会跳过它。
+ */
+
+const MEDIA_LINE = /^\s*\[\[media:([A-Za-z0-9_-]{1,40})\]\]\s*$/;
+
+const mediaToken = (key) => `[[media:${key}]]`;
+
+function isMediaLine(line) {
+  return MEDIA_LINE.test(String(line || ''));
+}
+
+function mediaKeyOf(line) {
+  const m = String(line || '').match(MEDIA_LINE);
+  return m ? m[1] : null;
+}
+
+/** 导出纯文本 / 预览时，把标记换成人能看懂的文字 */
+function describeMediaTokens(text, label = '［图片］') {
+  return String(text || '').replace(/\[\[media:[A-Za-z0-9_-]{1,40}\]\]/g, label);
+}
+
+/** 按扩展名猜 MIME */
+function guessMime(path) {
+  const ext = String(path || '').toLowerCase().split('?')[0].split('#')[0].split('.').pop();
+  return {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+    svg: 'image/svg+xml', bmp: 'image/bmp', avif: 'image/avif',
+    mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg', mov: 'video/quicktime',
+    mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg', wav: 'audio/wav',
+  }[ext] || 'application/octet-stream';
+}
+
+function mediaKind(mime) {
+  if (/^video\//.test(mime || '')) return 'video';
+  if (/^audio\//.test(mime || '')) return 'audio';
+  return 'image';
+}
+
+
 /* ===== src/encoding.js ===== */
 /**
  * 文本编码识别与解码。
@@ -1552,6 +1620,7 @@ function repairChapters(chapters, options = {}) {
  *  4) 合并被硬换行打断的段落、压缩空行、统一段首缩进
  */
 
+
 const CLEAN_DEFAULTS = {
   removeUrls: true,        // 删除网址
   removeAds: true,         // 删除广告 / 水印行
@@ -1730,6 +1799,12 @@ function cleanText(raw, options = {}, splitOptions = {}) {
   for (const original of lines) {
     let line = original;
 
+    // 图片 / 视频占位标记：原样保留，不参与任何清洗规则
+    if (isMediaLine(line)) {
+      cleaned.push(line.trim());
+      continue;
+    }
+
     if (opts.fixMojibake) {
       const fixed = tryFixMojibake(line);
       if (fixed !== line) {
@@ -1787,7 +1862,8 @@ function cleanText(raw, options = {}, splitOptions = {}) {
       }
       // 规则识别到的标题、以及"疑似标题"（例如只写了 123 的那种）都不参与合并，
       // 否则漏识别的标题会被粘进正文，后面就再也补不回来了
-      if (looksLikeHeading(trimmed, headingOpts) || looksLikeLooseHeading(trimmed, splitOpts.maxTitleLength)) {
+      if (isMediaLine(trimmed)
+        || looksLikeHeading(trimmed, headingOpts) || looksLikeLooseHeading(trimmed, splitOpts.maxTitleLength)) {
         merged.push(trimmed);
         continue;
       }
@@ -1795,6 +1871,7 @@ function cleanText(raw, options = {}, splitOptions = {}) {
       while (wrapWidth > 0 && i + 1 < cleaned.length) {
         const next = cleaned[i + 1] ? cleaned[i + 1].trim() : '';
         if (!next) break;
+        if (isMediaLine(next)) break;
         if (looksLikeHeading(next, headingOpts) || looksLikeLooseHeading(next, splitOpts.maxTitleLength)) break;
         if (current.length < wrapWidth) break;
         if (ENDING_PUNCT.test(current)) break;
@@ -1822,7 +1899,7 @@ function cleanText(raw, options = {}, splitOptions = {}) {
       continue;
     }
     blank = 0;
-    const isHeading = looksLikeHeading(line, headingOpts);
+    const isHeading = isMediaLine(line) || looksLikeHeading(line, headingOpts);
     if (opts.indentParagraphs && !isHeading) out.push(`　　${line.trim()}`);
     else out.push(line.trim());
   }
@@ -2161,6 +2238,7 @@ function loadPdfjs() {
  */
 
 
+
 const ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ldquo: '“', rdquo: '”',
   lsquo: '‘', rsquo: '’', hellip: '…', mdash: '—', ndash: '–', middot: '·',
@@ -2171,6 +2249,63 @@ function decodeEntities(text) {
     .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
     .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
     .replace(/&([a-z]+);/gi, (m, name) => (ENTITIES[name.toLowerCase()] != null ? ENTITIES[name.toLowerCase()] : m));
+}
+
+
+/** 精确取属性（避免 src 误匹配到 data-src 之类） */
+function attrExact(tag, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\:]/g, '\\$&');
+  const m = tag.match(new RegExp(`(?:^|[\\s<])${escaped}\\s*=\\s*["']([^"']*)["']`, 'i'));
+  return m ? m[1] : '';
+}
+
+/**
+ * 把一篇 XHTML 里的图片 / 视频 / 音频换成占位标记，并登记要读取的文件。
+ * @param {Map} registry 路径 → { key, mime, alt }，同一张图在全书里只存一份
+ */
+function replaceMediaTags(html, docPath, registry) {
+  const base = docPath.includes('/') ? docPath.replace(/[^/]+$/, '') : '';
+  const register = (src, fallbackMime, alt) => {
+    if (!src || /^(https?:|javascript:)/i.test(src)) return '';
+    const path = /^data:/i.test(src) ? src : resolvePath(base, src);
+    if (!path) return '';
+    if (!registry.has(path)) {
+      registry.set(path, {
+        key: `m${registry.size + 1}`,
+        mime: /^data:([^;,]+)/i.test(path) ? path.match(/^data:([^;,]+)/i)[1] : (guessMime(path) || fallbackMime),
+        alt: alt || '',
+      });
+    }
+    return `<p>${mediaToken(registry.get(path).key)}</p>`;
+  };
+
+  let out = String(html || '');
+  // 先处理 <video>/<audio>：它们可能套着 <source>，也可能带 poster 图
+  out = out.replace(/<((?:[\w-]+:)?(?:video|audio))\b([^>]*)>([\s\S]*?)<\/\1>/gi, (m, tag, attrs, inner) => {
+    const src = attrExact(attrs, 'src')
+      || ((inner.match(/<(?:[\w-]+:)?source\b[^>]*>/i) || [''])[0] && attrExact((inner.match(/<(?:[\w-]+:)?source\b[^>]*>/i) || [''])[0], 'src'));
+    const kind = /audio$/i.test(tag) ? 'audio/mpeg' : 'video/mp4';
+    return register(src, kind, '') || '';
+  });
+  out = out.replace(/<(?:[\w-]+:)?(?:video|audio)\b[^>]*\/>/gi, (m) => register(attrExact(m, 'src'), 'video/mp4', ''));
+  // <img> 与 SVG 里的 <image>
+  out = out.replace(/<(?:[\w-]+:)?(?:img|image)\b[^>]*>/gi, (m) => {
+    const src = attrExact(m, 'src') || attrExact(m, 'xlink:href') || attrExact(m, 'href');
+    return register(src, 'image/jpeg', attrExact(m, 'alt') || attrExact(m, 'title'));
+  });
+  return out;
+}
+
+function decodeDataUri(uri) {
+  const m = String(uri).match(/^data:([^;,]+)?(;base64)?,(.*)$/i);
+  if (!m) return null;
+  if (m[2]) {
+    const bin = atob(m[3]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  return new TextEncoder().encode(decodeURIComponent(m[3]));
 }
 
 /** HTML / XHTML → 纯文本，保留段落换行 */
@@ -2386,9 +2521,12 @@ async function parseEpub(buffer) {
   }
 
   const chapters = [];
+  const mediaRegistry = new Map();
   for (const doc of docs) {
-    const html = await zip.text(doc.href);
-    if (html == null) continue;
+    const rawHtml = await zip.text(doc.href);
+    if (rawHtml == null) continue;
+    // 图片 / 视频先换成占位标记，再转文本，否则会跟着标签一起被剥掉
+    const html = replaceMediaTags(rawHtml, doc.href, mediaRegistry);
     const content = htmlToText(html);
     if (!content.replace(/\s/g, '')) continue;
     const label = tocMap.get(doc.href) || firstTagText(html)
@@ -2399,8 +2537,18 @@ async function parseEpub(buffer) {
     chapters.push({ title: label, content: lines.join('\n') });
   }
 
+  // 把登记过的媒体文件本体读出来
+  const media = [];
+  for (const [path, info] of mediaRegistry) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = /^data:/i.test(path) ? decodeDataUri(path) : await zip.bytes(path);
+      if (bytes && bytes.length) media.push({ key: info.key, bytes, mime: info.mime, alt: info.alt, name: path.split('/').pop() });
+    } catch { /* 单个文件读不出来不影响整本书 */ }
+  }
+
   const text = chapters.map((c) => `${c.title}\n${c.content}`).join('\n\n');
-  return { title, author, chapters, text, cover };
+  return { title, author, chapters, text, cover, media };
 }
 
 
@@ -2708,6 +2856,7 @@ function stripRunningHeads(pages) {
   for (const lines of lineSets) {
     for (const idx of edgeIndexes(lines)) {
       const line = (lines[idx] || '').trim();
+      if (/^\[\[media:/.test(line)) continue;
       if (line && line.length <= 40) counts.set(line, (counts.get(line) || 0) + 1);
     }
   }
@@ -2720,7 +2869,7 @@ function stripRunningHeads(pages) {
     const out = [...lines];
     for (const idx of edgeIndexes(out)) {
       const line = (out[idx] || '').trim();
-      if (!line) continue;
+      if (!line || /^\[\[media:[A-Za-z0-9_-]+\]\]$/.test(line)) continue;
       if (isPageNumber(line) || (counts.get(line) || 0) >= threshold) out[idx] = '';
     }
     return out.join('\n').trim();
@@ -2894,6 +3043,7 @@ async function parsePdf(buffer) {
 
 
 
+
 /** 导入分栏：每一栏只认自己的扩展名 */
 const FORMAT_GROUPS = [
   {
@@ -2940,26 +3090,117 @@ function groupOf(name) {
 
 /* ---------------- PDF ---------------- */
 
-/** pdf.js 的文字块 → 按行合并 */
+/** pdf.js 的文字块 → 按行合并，同时记下每行的纵坐标（用来把图片插回原位） */
 function pdfItemsToLines(items) {
   const lines = [];
   let current = '';
+  let y = null;
   for (const item of items) {
     if (typeof item.str !== 'string') continue;
+    if (y == null && item.transform) y = item.transform[5];
     current += item.str;
     if (item.hasEOL) {
-      if (current.trim()) lines.push(current.trim());
+      if (current.trim()) lines.push({ text: current.trim(), y });
       current = '';
+      y = null;
     }
   }
-  if (current.trim()) lines.push(current.trim());
+  if (current.trim()) lines.push({ text: current.trim(), y });
   return lines;
 }
 
+/* ---- PDF 里的图片：按操作符列表跟踪变换矩阵，算出每张图在页面上的位置 ---- */
+const mulMatrix = (m, n) => [
+  m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3],
+  m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3],
+  m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5],
+];
+
+function pdfImageBoxes(ops, OPS) {
+  const paintOps = new Set([
+    OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageXObjectRepeat, OPS.paintJpegXObject,
+  ].filter((v) => v != null));
+  const boxes = [];
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const stack = [];
+  for (let i = 0; i < ops.fnArray.length; i += 1) {
+    const fn = ops.fnArray[i];
+    const args = ops.argsArray[i];
+    if (fn === OPS.save) stack.push(ctm.slice());
+    else if (fn === OPS.restore) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
+    else if (fn === OPS.transform) ctm = mulMatrix(args, ctm);
+    else if (fn === OPS.paintFormXObjectBegin) {
+      stack.push(ctm.slice());
+      if (args && Array.isArray(args[0]) && args[0].length === 6) ctm = mulMatrix(args[0], ctm);
+    } else if (fn === OPS.paintFormXObjectEnd) ctm = stack.pop() || ctm;
+    else if (paintOps.has(fn)) {
+      const pts = [[0, 0], [1, 0], [0, 1], [1, 1]]
+        .map(([x, y]) => [ctm[0] * x + ctm[2] * y + ctm[4], ctm[1] * x + ctm[3] * y + ctm[5]]);
+      const xs = pts.map((p) => p[0]);
+      const ys = pts.map((p) => p[1]);
+      boxes.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) });
+    }
+  }
+  return boxes;
+}
+
+const canvasToBlob = (canvas) => new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+
+/** 把一页里的图片裁出来；背景图、装饰小图会被过滤掉 */
+async function extractPdfPageImages(page, pdfjs, pageNo, textLength) {
+  const ops = await page.getOperatorList();
+  const boxes = pdfImageBoxes(ops, pdfjs.OPS);
+  if (!boxes.length) return [];
+  const base = page.getViewport({ scale: 1 });
+  const pageArea = base.width * base.height;
+  const scale = Math.min(2.5, 1600 / base.width);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  await page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport }).promise;
+
+  const images = [];
+  for (const box of boxes) {
+    const area = (box.x1 - box.x0) * (box.y1 - box.y0);
+    if (area > pageArea * 0.8 && textLength > 80) continue;       // 整页背景 / 水印
+    const [a, b, c, d] = viewport.convertToViewportRectangle([box.x0, box.y0, box.x1, box.y1]);
+    const left = Math.max(0, Math.floor(Math.min(a, c)));
+    const top = Math.max(0, Math.floor(Math.min(b, d)));
+    const width = Math.min(canvas.width, Math.ceil(Math.max(a, c))) - left;
+    const height = Math.min(canvas.height, Math.ceil(Math.max(b, d))) - top;
+    if (width < 48 || height < 48) continue;                        // 装饰小图、图标
+    const crop = document.createElement('canvas');
+    crop.width = width;
+    crop.height = height;
+    crop.getContext('2d').drawImage(canvas, left, top, width, height, 0, 0, width, height);
+    // eslint-disable-next-line no-await-in-loop
+    const blob = await canvasToBlob(crop);
+    if (blob) {
+      images.push({ key: `p${pageNo}i${images.length + 1}`, blob, mime: 'image/jpeg', top: box.y1 });
+    }
+  }
+  canvas.width = 0;
+  canvas.height = 0;
+  return images;
+}
+
+/** 按纵坐标把图片标记插回这一页的文字里（PDF 坐标 y 向上） */
+function mergeLinesAndImages(lines, images) {
+  const out = lines.map((l) => ({ ...l }));
+  for (const image of [...images].sort((p, q) => q.top - p.top)) {
+    const index = out.findIndex((l) => l.y != null && l.y < image.top && !l.media);
+    const entry = { text: mediaToken(image.key), y: image.top, media: true };
+    if (index === -1) out.push(entry);
+    else out.splice(index, 0, entry);
+  }
+  return out.map((l) => l.text);
+}
+
 /**
- * 用 pdf.js 提取文字。
+ * 用 pdf.js 提取文字和插图。
  * @param {ArrayBuffer} buffer
- * @param {{onProgress?: Function, onPassword?: Function}} options
+ * @param {{onProgress?: Function, onPassword?: Function, withImages?: boolean}} options
  */
 async function extractPdfWithPdfjs(buffer, options = {}) {
   const pdfjs = await loadPdfjs();
@@ -2979,11 +3220,20 @@ async function extractPdfWithPdfjs(buffer, options = {}) {
   }
   const doc = await task.promise;
   const pages = [];
+  const media = [];
+  const withImages = options.withImages !== false && typeof document !== 'undefined';
   for (let i = 1; i <= doc.numPages; i += 1) {
     /* eslint-disable no-await-in-loop */
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
-    pages.push(pdfItemsToLines(content.items).join('\n'));
+    const lines = pdfItemsToLines(content.items);
+    let images = [];
+    if (withImages) {
+      const textLength = lines.reduce((n, l) => n + l.text.length, 0);
+      try { images = await extractPdfPageImages(page, pdfjs, i, textLength); } catch { images = []; }
+    }
+    media.push(...images);
+    pages.push(mergeLinesAndImages(lines, images).join('\n'));
     page.cleanup();
     /* eslint-enable no-await-in-loop */
     if (options.onProgress) options.onProgress(i, doc.numPages);
@@ -3007,14 +3257,16 @@ async function extractPdfWithPdfjs(buffer, options = {}) {
 
   doc.destroy();
   const cleaned = stripRunningHeads(pages);
-  return { title, pages: cleaned, text: cleaned.filter(Boolean).join('\n\n'), via: 'pdf.js', cover };
+  return {
+    title, pages: cleaned, text: cleaned.filter(Boolean).join('\n\n'), via: 'pdf.js', cover, media,
+  };
 }
 
 async function readPdf(buffer, options = {}) {
   let lastError = null;
   try {
     const result = await extractPdfWithPdfjs(buffer, options);
-    if (result.text.replace(/\s/g, '')) return result;
+    if (describeMediaTokens(result.text, '').replace(/\s/g, '')) return result;
     lastError = new Error('这个 PDF 里没有可提取的文字（多半是扫描图片版，需要先 OCR 转成文字）');
   } catch (err) {
     lastError = err;
@@ -3209,7 +3461,13 @@ async function readAnyFile(file, options = {}) {
   if (ext === 'pdf') {
     const pdf = await readPdf(buffer, options);
     return {
-      ...base, kind: 'pdf', raw: pdf.text, name: cleanBookTitle(pdf.title || file.name), via: pdf.via, cover: pdf.cover || null,
+      ...base,
+      kind: 'pdf',
+      raw: pdf.text,
+      name: cleanBookTitle(pdf.title || file.name),
+      via: pdf.via,
+      cover: pdf.cover || null,
+      media: pdf.media || [],
     };
   }
   if (ext === 'epub') {
@@ -3223,6 +3481,7 @@ async function readAnyFile(file, options = {}) {
       name: cleanBookTitle(book.title || file.name),
       author: book.author || '',
       cover: book.cover ? bytesToDataUrl(book.cover.bytes, book.cover.mime) : null,
+      media: book.media || [],
     };
   }
   if (ext === 'docx') {
@@ -3426,7 +3685,7 @@ function splitSentences(text) {
   const sentences = [];
   for (const rawLine of String(text || '').split('\n')) {
     const line = rawLine.trim();
-    if (!line) continue;
+    if (!line || isMediaLine(line)) continue;   // 图片 / 视频不朗读
     const chars = [...line];
     let buffer = '';
     for (let i = 0; i < chars.length; i += 1) {
@@ -3600,11 +3859,12 @@ function createSpeaker(options = {}) {
  */
 
 const DB_NAME = 'novel-reader';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_BOOKS = 'books';
 const STORE_CONTENT = 'contents';
 const STORE_MARKS = 'marks';   // 书签与笔记
 const STORE_COVERS = 'covers'; // 书架封面（dataURL）
+const STORE_MEDIA = 'media';   // 书里的图片 / 视频 / 音频（Blob），id = 书id:key
 const SETTINGS_KEY = 'novel-reader:settings';
 
 let dbPromise = null;
@@ -3626,6 +3886,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains(STORE_COVERS)) {
         db.createObjectStore(STORE_COVERS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_MEDIA)) {
+        db.createObjectStore(STORE_MEDIA, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -3699,13 +3962,78 @@ async function updateBook(meta) {
 }
 
 async function deleteBook(id) {
-  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS, STORE_COVERS], 'readwrite', ([books, contents, marks, covers]) => {
-    books.delete(id);
-    contents.delete(id);
-    marks.delete(id);
-    covers.delete(id);
-  });
+  await tx([STORE_BOOKS, STORE_CONTENT, STORE_MARKS, STORE_COVERS, STORE_MEDIA], 'readwrite',
+    ([books, contents, marks, covers, media]) => {
+      books.delete(id);
+      contents.delete(id);
+      marks.delete(id);
+      covers.delete(id);
+      media.delete(mediaRange(id));
+    });
 }
+
+/* ---------------- 书内图片 / 视频 ---------------- */
+
+const mediaRange = (bookId) => IDBKeyRange.bound(`${bookId}:`, `${bookId}:\uffff`);
+
+const toBlob = (item) => {
+  if (item.blob instanceof Blob) return item.blob;
+  return new Blob([item.bytes || new Uint8Array(0)], { type: item.mime || 'application/octet-stream' });
+};
+
+/** @param {Array<{key:string, blob?:Blob, bytes?:Uint8Array, mime:string, alt?:string, name?:string}>} items */
+async function saveMedia(bookId, items) {
+  if (!items || !items.length) return 0;
+  await tx(STORE_MEDIA, 'readwrite', (store) => {
+    for (const item of items) {
+      const blob = toBlob(item);
+      store.put({
+        id: `${bookId}:${item.key}`,
+        bookId,
+        key: item.key,
+        mime: item.mime || blob.type || 'application/octet-stream',
+        alt: item.alt || '',
+        name: item.name || '',
+        size: blob.size,
+        blob,
+      });
+    }
+  });
+  return items.length;
+}
+
+/** 当前书的所有媒体（Blob 只是句柄，真正读的时候才加载） */
+async function listMedia(bookId) {
+  const rows = await tx(STORE_MEDIA, 'readonly', (store) => reqValue(store.getAll(mediaRange(bookId))));
+  return rows || [];
+}
+
+async function mediaCounts() {
+  const rows = await tx(STORE_MEDIA, 'readonly', (store) => reqValue(store.getAllKeys()));
+  const map = new Map();
+  for (const key of rows || []) {
+    const bookId = String(key).split(':')[0];
+    map.set(bookId, (map.get(bookId) || 0) + 1);
+  }
+  return map;
+}
+
+const blobToBase64 = (blob) => blob.arrayBuffer().then((buf) => {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+});
+
+const base64ToBytes = (b64) => {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+};
+
+/** 单个超过这个大小的视频不放进备份，免得备份文件大到打不开 */
+const BACKUP_MEDIA_LIMIT = 30 * 1024 * 1024;
 
 /* ---------------- 封面 ---------------- */
 
@@ -3763,7 +4091,7 @@ async function exportBackup(options = {}) {
   const books = await listBooks();
   const out = {
     format: BACKUP_FORMAT,
-    version: 2,
+    version: 3,
     createdAt: Date.now(),
     includeText,
     settings: loadSettings(),
@@ -3778,6 +4106,16 @@ async function exportBackup(options = {}) {
     if (includeText) {
       const cover = await getCover(meta.id);
       if (cover && cover.dataUrl) entry.cover = { dataUrl: cover.dataUrl, source: cover.source };
+      const media = await listMedia(meta.id);
+      if (media.length) {
+        entry.media = [];
+        for (const row of media) {
+          if (row.size > BACKUP_MEDIA_LIMIT) { out.skippedMedia = (out.skippedMedia || 0) + 1; continue; }
+          entry.media.push({
+            key: row.key, mime: row.mime, alt: row.alt, name: row.name, data: await blobToBase64(row.blob),
+          });
+        }
+      }
     }
     if (includeText) {
       const content = await getContent(meta.id);
@@ -3839,6 +4177,10 @@ async function importBackup(data, options = {}) {
     if (!entry.content) { result.skipped += 1; continue; }   // 轻量备份里没有正文，书不在就没法恢复
     await saveBook(meta, entry.content);
     if ((entry.marks || []).length) await saveMarks(meta.id, entry.marks);
+    if (entry.cover && entry.cover.dataUrl) await saveCover(meta.id, entry.cover.dataUrl, entry.cover.source || 'restored');
+    if ((entry.media || []).length) {
+      await saveMedia(meta.id, entry.media.map((m) => ({ ...m, bytes: base64ToBytes(m.data) })));
+    }
     result.restored += 1;
     /* eslint-enable no-await-in-loop */
   }
@@ -3899,7 +4241,8 @@ function saveSettings(settings) {
 
 
 
-const APP_VERSION = '1.9.0';   // 显示在阅读设置里，方便确认用的是哪一版
+
+const APP_VERSION = '1.10.0';   // 显示在阅读设置里，方便确认用的是哪一版
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -3928,6 +4271,8 @@ const state = {
   marks: [],           // 当前书的书签与笔记
   markCounts: new Map(),
   covers: new Map(),
+  mediaIndex: new Map(),  // 当前书的图片 / 视频：key → { mime, alt, blob }
+  mediaUrls: new Map(),   // key → blob URL（换书时统一释放）
   shelf: { selecting: false, picked: new Set(), page: 1, status: 'all', tidyPlan: 'format' },
   editingMark: null,
   ocr: null,
@@ -4544,6 +4889,8 @@ function renderShelf() {
 function showShelf() {
   stopAutoScroll();
   stopTts();
+  releaseMediaUrls();
+  state.mediaIndex = new Map();
   state.book = null;
   state.marks = [];
   $('view-shelf').classList.remove('hidden');
@@ -4707,7 +5054,15 @@ function runPreview() {
   });
   if (chapters.length > 12) list.appendChild(el('li', 'muted', `… 共 ${fmtNum(chapters.length)} 章`));
 
-  $('preview-text').textContent = text.slice(0, 900) || '（清洗后内容为空，请检查清洗选项）';
+  $('preview-text').textContent = describeMediaTokens(text.slice(0, 900)) || '（清洗后内容为空，请检查清洗选项）';
+  const mediaCount = (pending.media || []).length;
+  if (mediaCount) {
+    const videos = pending.media.filter((m) => /^video\//.test(m.mime)).length;
+    const audios = pending.media.filter((m) => /^audio\//.test(m.mime)).length;
+    const images = mediaCount - videos - audios;
+    const parts = [images && `${images} 张图片`, videos && `${videos} 段视频`, audios && `${audios} 段音频`].filter(Boolean);
+    $('preview-stats').textContent += `；另含 ${parts.join('、')}，会原位显示`;
+  }
   $('import-status').textContent = usedFallback
     ? `未匹配到章节标题，已按每 ${splitOpts.fallbackLines} 行自动分为 ${chapters.length} 章`
     : `识别到 ${fmtNum(chapters.length)} 章${useNative ? '（来自电子书自带目录）' : ''}`;
@@ -4741,6 +5096,7 @@ function openImportModal(raw, name, encodingInfo, existing, native) {
     kind: encodingInfo.kind || 'txt',
     file: encodingInfo.file || null,
     cover: encodingInfo.cover || null,
+    media: encodingInfo.media || [],
   };
   // PDF 文字提取不理想时，可以直接转去 OCR
   $('btn-ocr-again').classList.toggle('hidden', !(encodingInfo.file && extOf(encodingInfo.file.name) === 'pdf'));
@@ -4869,6 +5225,10 @@ async function confirmImport() {
     const dataUrl = pending.cover ? await fitCover(pending.cover) : generateCover({ title, kind: meta.kind });
     await saveCover(id, dataUrl, pending.cover ? 'embedded' : 'generated');
   } catch { /* 封面失败不影响导入 */ }
+  // 书里的图片 / 视频
+  if (pending.media && pending.media.length) {
+    try { await saveMedia(id, pending.media); } catch (err) { toast(`图片保存失败：${err.message}`); }
+  }
 
   hideModal('import-modal');
   state.pending = null;
@@ -5048,6 +5408,9 @@ async function batchImport(files) {
         const dataUrl = info.cover ? await fitCover(info.cover) : generateCover({ title: info.name, kind: info.kind });
         await saveCover(meta.id, dataUrl, info.cover ? 'embedded' : 'generated');
       } catch { /* 封面失败不影响入库 */ }
+      if (info.media && info.media.length) {
+        try { await saveMedia(meta.id, info.media); } catch { /* 媒体失败不影响入库 */ }
+      }
       existing.push(meta);
       ok += 1;
       const repaired = split && split.repair && split.repair.inserted ? `，补回 ${split.repair.inserted} 章` : '';
@@ -5111,6 +5474,12 @@ async function openBook(id) {
   const content = await getContent(id);
   if (!content) { toast('正文数据丢失，请重新导入'); return; }
 
+  releaseMediaUrls();
+  state.mediaIndex = new Map();
+  try {
+    for (const row of await listMedia(id)) state.mediaIndex.set(row.key, row);
+  } catch { /* 读不到媒体就当纯文字书 */ }
+
   state.book = meta;
   state.chapterTexts = content.chapterTexts && content.chapterTexts.length
     ? content.chapterTexts
@@ -5149,6 +5518,48 @@ function isScrollMode() {
 }
 
 /** 把一章正文转成段落 HTML */
+/* ---------------- 书内图片 / 视频 ---------------- */
+function mediaUrl(key) {
+  if (state.mediaUrls.has(key)) return state.mediaUrls.get(key);
+  const row = state.mediaIndex.get(key);
+  if (!row || !row.blob) return '';
+  const url = URL.createObjectURL(row.blob);
+  state.mediaUrls.set(key, url);
+  return url;
+}
+
+function releaseMediaUrls() {
+  for (const url of state.mediaUrls.values()) URL.revokeObjectURL(url);
+  state.mediaUrls.clear();
+}
+
+/** 把一行 [[media:KEY]] 渲染成图片 / 视频 / 音频 */
+function mediaHtml(line) {
+  const key = mediaKeyOf(line);
+  const row = key ? state.mediaIndex.get(key) : null;
+  if (!row) {
+    return '<figure class="book-media missing"><div class="media-missing">［这里原本有一张图片或视频，'
+      + '但导入时没有保存下来。重新导入这本书即可看到］</div></figure>';
+  }
+  const url = mediaUrl(key);
+  const alt = escapeHtml(row.alt || '');
+  const kind = mediaKind(row.mime);
+  let body;
+  if (kind === 'video') body = `<video controls preload="metadata" src="${url}" data-media="${key}"></video>`;
+  else if (kind === 'audio') body = `<audio controls preload="metadata" src="${url}" data-media="${key}"></audio>`;
+  else body = `<img src="${url}" alt="${alt}" loading="lazy" data-media="${key}" title="点击查看大图">`;
+  const caption = row.alt ? `<figcaption>${alt}</figcaption>` : '';
+  return `<figure class="book-media ${kind}">${body}${caption}</figure>`;
+}
+
+function openLightbox(src, alt) {
+  const box = $('lightbox');
+  $('lightbox-img').src = src;
+  $('lightbox-img').alt = alt || '';
+  $('lightbox-caption').textContent = alt || '';
+  box.classList.remove('hidden');
+}
+
 function ttsActiveFor(index) {
   return !!(state.tts && state.tts.chapterIndex === index);
 }
@@ -5161,6 +5572,7 @@ function chapterInnerHtml(index) {
     const html = text.split('\n').map((line) => {
       const trimmed = line.trim();
       if (!trimmed) return '<p class="blank"></p>';
+      if (isMediaLine(trimmed)) return mediaHtml(trimmed);
       const indent = (line.match(/^[\s　]*/) || [''])[0];
       const inner = splitSentences(trimmed)
         .map((sentence) => {
@@ -5177,6 +5589,7 @@ function chapterInnerHtml(index) {
   const html = text.split('\n').map((line) => {
     const t = line.trim();
     if (!t) return '<p class="blank"></p>';
+    if (isMediaLine(t)) return mediaHtml(t);
     let safe = escapeHtml(line);
     if (state.highlight) {
       const re = new RegExp(escapeRegExp(state.highlight), 'gi');
@@ -5778,7 +6191,7 @@ function stopAutoScroll() {
  * =======================================================*/
 function exportClean() {
   if (!state.book) return;
-  const blob = new Blob([state.cleanTextValue], { type: 'text/plain;charset=utf-8' });
+  const blob = new Blob([describeMediaTokens(state.cleanTextValue)], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -5905,6 +6318,11 @@ function bindEvents() {
     hideSelPop();
     addBookmark(text);
   });
+  $('view-reader').addEventListener('click', (e) => {
+    const img = e.target.closest && e.target.closest('.book-media img');
+    if (img) openLightbox(img.src, img.alt);
+  });
+  $('lightbox').addEventListener('click', () => $('lightbox').classList.add('hidden'));
   $('btn-tts').addEventListener('click', toggleTts);
   $('tts-toggle').addEventListener('click', toggleTts);
   $('tts-prev').addEventListener('click', () => { if (state.tts) state.tts.speaker.jump(-1); updateTtsBar(); });
@@ -6024,6 +6442,7 @@ function bindEvents() {
     }
     if (e.key === 'Escape') {
       closePanels(); hideSelPop();
+      $('lightbox').classList.add('hidden');
       hideModal('import-modal'); hideModal('paste-modal'); hideModal('note-modal');
       hideModal('error-modal'); hideModal('ocr-modal'); hideModal('tidy-modal');
       return;
